@@ -141,7 +141,8 @@ def detect_encoding(file_path: str) -> str:
         The detected encoding or 'utf-8' as fallback
     """
     # Prioritize UTF-8 variants and Unicode-aware encodings
-    encodings = ['utf-8', 'utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be', 'latin-1', 'cp1252', 'iso-8859-1']
+    # Note: utf-16 variants require BOM, so we'll try them last
+    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
     
     for encoding in encodings:
         try:
@@ -152,6 +153,7 @@ def detect_encoding(file_path: str) -> str:
                 logger.info(f"Detected encoding for {file_path}: {encoding}")
                 return encoding
         except UnicodeDecodeError:
+            logger.debug(f"Failed to decode {file_path} with {encoding} encoding")
             continue
         except Exception as e:
             logger.warning(f"Error testing {encoding} encoding for {file_path}: {e}")
@@ -779,7 +781,8 @@ def generate_report():
         
         # Try multiple encodings for reading the headers
         # Prioritize UTF-8 variants and Unicode-aware encodings
-        encodings = ['utf-8', 'utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be', 'latin-1', 'cp1252', 'iso-8859-1']
+        # Note: utf-16 variants require BOM, so we'll try them last
+        encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
         for encoding in encodings:
             try:
                 with open(CSV_FILE, 'r', newline='', encoding=encoding) as f:
@@ -787,8 +790,11 @@ def generate_report():
                     original_fieldnames = next(reader)  # Get header row
                 logger.info(f"Successfully read CSV headers with {encoding} encoding")
                 break
-            except UnicodeDecodeError:
-                logger.warning(f"Failed to decode CSV headers with {encoding} encoding, trying next...")
+            except UnicodeDecodeError as e:
+                if 'utf-16' in encoding and 'BOM' in str(e):
+                    logger.debug(f"Skipping {encoding} - file doesn't have BOM")
+                else:
+                    logger.warning(f"Failed to decode CSV headers with {encoding} encoding, trying next...")
             except Exception as e:
                 logger.warning(f"Could not read headers from input CSV with {encoding} encoding: {e}")
         
@@ -883,7 +889,8 @@ def count_csv_rows(file_path):
     """Count the total number of rows in the CSV file."""
     # Try multiple encodings in order of likelihood
     # Prioritize UTF-8 variants and Unicode-aware encodings
-    encodings = ['utf-8', 'utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be', 'latin-1', 'cp1252', 'iso-8859-1']
+    # Note: utf-16 variants require BOM, so we'll try them last
+    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
     
     for encoding in encodings:
         try:
@@ -891,8 +898,11 @@ def count_csv_rows(file_path):
                 count = sum(1 for _ in csv.reader(f)) - 1  # Subtract header row
                 logger.info(f"Successfully read CSV with {encoding} encoding")
                 return count
-        except UnicodeDecodeError:
-            logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
+        except UnicodeDecodeError as e:
+            if 'utf-16' in encoding and 'BOM' in str(e):
+                logger.debug(f"Skipping {encoding} - file doesn't have BOM")
+            else:
+                logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
         except Exception as e:
             logger.error(f"Error counting CSV rows: {e}")
             return 0
@@ -1251,7 +1261,8 @@ def load_failed_rows(results_csv):
     
     # Try multiple encodings
     # Prioritize UTF-8 variants and Unicode-aware encodings
-    encodings = ['utf-8', 'utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be', 'latin-1', 'cp1252', 'iso-8859-1']
+    # Note: utf-16 variants require BOM, so we'll try them last
+    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
     success = False
     
     for encoding in encodings:
@@ -1273,8 +1284,11 @@ def load_failed_rows(results_csv):
             success = True
             logger.info(f"Successfully read results CSV with {encoding} encoding")
             break
-        except UnicodeDecodeError:
-            logger.warning(f"Failed to decode results CSV with {encoding} encoding, trying next...")
+        except UnicodeDecodeError as e:
+            if 'utf-16' in encoding and 'BOM' in str(e):
+                logger.debug(f"Skipping {encoding} - file doesn't have BOM")
+            else:
+                logger.warning(f"Failed to decode results CSV with {encoding} encoding, trying next...")
         except Exception as e:
             logger.error(f"Error loading failed rows with {encoding} encoding: {e}")
     
@@ -1330,7 +1344,8 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
             logger.info(f"Large file detected ({total_rows} rows). Using streaming mode.")
             # Try multiple encodings for large files
             # Prioritize UTF-8 variants and Unicode-aware encodings
-            encodings = ['utf-8', 'utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be', 'latin-1', 'cp1252', 'iso-8859-1']
+            # Note: utf-16 variants require BOM, so we'll try them last
+            encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
             success = False
             
             for encoding in encodings:
@@ -1364,8 +1379,11 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
                     success = True
                     logger.info(f"Successfully processed CSV with {encoding} encoding")
                     break
-                except UnicodeDecodeError:
-                    logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
+                except UnicodeDecodeError as e:
+                    if 'utf-16' in encoding and 'BOM' in str(e):
+                        logger.debug(f"Skipping {encoding} - file doesn't have BOM")
+                    else:
+                        logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
                 except Exception as e:
                     logger.error(f"Error processing CSV with {encoding} encoding: {e}")
             
@@ -1380,7 +1398,8 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
             # For smaller files, load everything into memory
             # Try multiple encodings
             # Prioritize UTF-8 variants and Unicode-aware encodings
-            encodings = ['utf-8', 'utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be', 'latin-1', 'cp1252', 'iso-8859-1']
+            # Note: utf-16 variants require BOM, so we'll try them last
+            encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
             success = False
             
             for encoding in encodings:
@@ -1396,8 +1415,11 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
                     success = True
                     logger.info(f"Successfully read CSV with {encoding} encoding")
                     break
-                except UnicodeDecodeError:
-                    logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
+                except UnicodeDecodeError as e:
+                    if 'utf-16' in encoding and 'BOM' in str(e):
+                        logger.debug(f"Skipping {encoding} - file doesn't have BOM")
+                    else:
+                        logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
                 except Exception as e:
                     logger.error(f"Error reading CSV with {encoding} encoding: {e}")
             
