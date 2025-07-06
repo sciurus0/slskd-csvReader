@@ -14,6 +14,7 @@ Supports single-track or full-album queueing with advanced features:
 - Retry-failed mode for failed downloads
 - Download status monitoring
 - Queue management with configurable limits
+- Filename sanitization for special characters
 
 Command-line Options:
 ------------------
@@ -124,8 +125,48 @@ from asyncio import TimeoutError
 from logging.handlers import RotatingFileHandler
 from typing import Dict, List, Tuple, Optional, Any, Union, Set, Callable, Awaitable
 import re
+import unicodedata
 
 import slskd_api
+
+# ======== Filename Sanitization ========
+def sanitize_filename(name: str, replacement: str = " ") -> str:
+    """
+    Sanitize a filename by replacing forbidden characters with spaces.
+    
+    Args:
+        name: The original filename/string to sanitize
+        replacement: Character to replace forbidden characters with (default: space)
+        
+    Returns:
+        Sanitized filename safe for all operating systems
+    """
+    if not name:
+        return ""
+    
+    # Normalize Unicode to handle weird invisible characters
+    name = unicodedata.normalize("NFKC", name)
+    
+    # Remove control characters (ASCII 0-31)
+    name = re.sub(r'[\x00-\x1f]', '', name)
+    
+    # Replace forbidden characters with replacement
+    # Windows: \ / : * ? " < > |
+    # Unix/Linux: / (null byte is already handled above)
+    forbidden = r'[\/:*?"<>|]'
+    name = re.sub(forbidden, replacement, name)
+    
+    # Remove trailing spaces and dots (Windows doesn't like these)
+    name = name.rstrip(" .")
+    
+    # Collapse multiple consecutive spaces into single space
+    name = re.sub(r'\s+', ' ', name)
+    
+    # Ensure the name isn't empty after sanitization
+    if not name.strip():
+        return "unnamed"
+    
+    return name.strip()
 
 # ======== Logging Setup ========
 log_dir = "logs"
@@ -1043,9 +1084,10 @@ async def process_row(client, row, row_index, total_rows):
         'fallback_used': False
     })
     
-    artist = (row.get('artist') or '').strip()
-    album = (row.get('album') or '').strip()
-    track = (row.get('track') or '').strip()
+    # Sanitize artist, album, and track names to handle special characters
+    artist = sanitize_filename((row.get('artist') or '').strip())
+    album = sanitize_filename((row.get('album') or '').strip())
+    track = sanitize_filename((row.get('track') or '').strip())
     
     if not artist or not album:
         result_entry['message'] = "Incomplete row"
