@@ -1174,14 +1174,32 @@ async def process_row(client, row, row_index, total_rows):
         logger.info(f"  Album: {repr(album)}")
         logger.info(f"  Track: {repr(track)}")
     
-    if not artist or not album:
-        result_entry['message'] = "Incomplete row"
+    # Validate required fields based on what we have
+    if not artist:
+        result_entry['message'] = "Missing artist (required)"
         results_log.append(result_entry)
-        logger.warning(f"Skipping incomplete row: {row}")
+        logger.warning(f"Skipping row with missing artist: {row}")
         return False
-
-    pattern = f"{artist} - {album}" + (f" - {track}" if track else '')
-    logger.info(f"🔍 Searching for: {pattern} ({row_index}/{total_rows})")
+    
+    # Determine search pattern based on available information
+    if album and track:
+        # Full information: Artist - Album - Track
+        pattern = f"{artist} - {album} - {track}"
+        search_type = "artist-album-track"
+    elif album and not track:
+        # Album download: Artist - Album
+        pattern = f"{artist} - {album}"
+        search_type = "artist-album"
+    elif track and not album:
+        # Single track without album: Artist - Track
+        pattern = f"{artist} - {track}"
+        search_type = "artist-track"
+    else:
+        # Only artist provided: search for artist
+        pattern = artist
+        search_type = "artist-only"
+    
+    logger.info(f"🔍 Searching for: {pattern} ({search_type}) ({row_index}/{total_rows})")
     
     try:
         resp_list = await search_slskd_async(pattern)
