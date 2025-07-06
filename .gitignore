@@ -1,6 +1,5 @@
 /.DS_Store
-/20250530-slskd-spotify.py
 /checkpoint.pkl
 /logs
-/slskd-spotify-bak.py
 /to_queue.csv
+/api.txt
