@@ -1052,8 +1052,8 @@ def score_filename_cleanliness(filename, artist, album, track):
     Args:
         filename (str): The filename to score
         artist (str): Artist name to match
-        album (str): Album name to match
-        track (str): Track name to match
+        album (str): Album name to match (can be empty for artist-track searches)
+        track (str): Track name to match (can be empty for album searches)
         
     Returns:
         float: A score from 0.0 (poor) to 10.0 (perfect match)
@@ -1074,12 +1074,25 @@ def score_filename_cleanliness(filename, artist, album, track):
     album_lower = album.lower()
     track_lower = track.lower()
     
-    # Check for exact matches of artist, album, and track (case insensitive)
-    # Full perfect match "Artist - Album - Track"
-    perfect_pattern = f"{artist_lower} - {album_lower} - {track_lower}"
-    if name_lower == perfect_pattern:
-        score = 10.0  # Perfect score for perfect match
-        return score
+    # Check for exact matches based on available information
+    if album_lower and track_lower:
+        # Full perfect match "Artist - Album - Track"
+        perfect_pattern = f"{artist_lower} - {album_lower} - {track_lower}"
+        if name_lower == perfect_pattern:
+            score = 10.0  # Perfect score for perfect match
+            return score
+    elif track_lower and not album_lower:
+        # Artist-track perfect match "Artist - Track"
+        perfect_pattern = f"{artist_lower} - {track_lower}"
+        if name_lower == perfect_pattern:
+            score = 9.5  # High score for artist-track match
+            return score
+    elif album_lower and not track_lower:
+        # Artist-album perfect match "Artist - Album"
+        perfect_pattern = f"{artist_lower} - {album_lower}"
+        if name_lower == perfect_pattern:
+            score = 9.0  # High score for artist-album match
+            return score
     
     # Recognize track numbers in various formats
     track_number_pattern = r'^\d{1,2}[-.\s]+'  # Matches "01 - ", "01. ", "01 ", etc.
@@ -1087,20 +1100,37 @@ def score_filename_cleanliness(filename, artist, album, track):
     if track_number_match:
         score += 0.5  # Small bonus for having a track number prefix
     
-    # Standard album filename patterns (with track number variations)
+    # Standard filename patterns (with track number variations)
     # Escape artist, album and track names for regex safety
     safe_artist = re.escape(artist_lower)
-    safe_album = re.escape(album_lower)
-    safe_track = re.escape(track_lower)
+    safe_album = re.escape(album_lower) if album_lower else ""
+    safe_track = re.escape(track_lower) if track_lower else ""
     
-    album_patterns = [
-        rf"{safe_artist} - {safe_album} - \d+[-.\s]+{safe_track}",  # Artist - Album - 01 - Track
-        rf"{safe_artist} - {safe_album} - {safe_track}",           # Artist - Album - Track
-        rf"\d+[-.\s]+{safe_artist} - {safe_track}",                # 01 - Artist - Track
-        rf"{safe_artist} - \d+[-.\s]+{safe_track}",                # Artist - 01 - Track
-    ]
+    if album_lower and track_lower:
+        # Full patterns with album and track
+        patterns = [
+            rf"{safe_artist} - {safe_album} - \d+[-.\s]+{safe_track}",  # Artist - Album - 01 - Track
+            rf"{safe_artist} - {safe_album} - {safe_track}",           # Artist - Album - Track
+        ]
+    elif track_lower and not album_lower:
+        # Artist-track patterns (no album)
+        patterns = [
+            rf"{safe_artist} - \d+[-.\s]+{safe_track}",                # Artist - 01 - Track
+            rf"{safe_artist} - {safe_track}",                          # Artist - Track
+            rf"\d+[-.\s]+{safe_artist} - {safe_track}",                # 01 - Artist - Track
+        ]
+    elif album_lower and not track_lower:
+        # Artist-album patterns (no track)
+        patterns = [
+            rf"{safe_artist} - {safe_album}",                          # Artist - Album
+        ]
+    else:
+        # Artist-only patterns
+        patterns = [
+            rf"{safe_artist}",                                         # Artist
+        ]
     
-    for pattern in album_patterns:
+    for pattern in patterns:
         if re.search(pattern, name_lower):
             score += 1.5
             break
@@ -1111,12 +1141,12 @@ def score_filename_cleanliness(filename, artist, album, track):
     else:
         score -= 2.0  # Significant penalty for missing artist
         
-    if track_lower in name_lower:
+    if track_lower and track_lower in name_lower:
         score += 1.0
-    else:
+    elif track_lower:
         score -= 3.0  # Major penalty for missing track name
         
-    if album_lower in name_lower:
+    if album_lower and album_lower in name_lower:
         score += 0.5
     
     # Penalties for suspicious content
@@ -1195,9 +1225,11 @@ async def process_row(client, row, row_index, total_rows):
         pattern = f"{artist} - {track}"
         search_type = "artist-track"
     else:
-        # Only artist provided: search for artist
-        pattern = artist
-        search_type = "artist-only"
+        # Only artist provided: throw error
+        result_entry['message'] = "Missing both album and track (at least one required)"
+        results_log.append(result_entry)
+        logger.warning(f"Skipping row with only artist: {row}")
+        return False
     
     logger.info(f"🔍 Searching for: {pattern} ({search_type}) ({row_index}/{total_rows})")
     
@@ -1214,7 +1246,7 @@ async def process_row(client, row, row_index, total_rows):
         files_queued = 0
         
         # Get ranked list of all candidates
-        ranked_candidates = rank_all_results(resp_list, artist, album, track)
+        ranked_candidates = rank_all_results(resp_list, artist, album if album else None, track if track else None)
         if not ranked_candidates:
             result_entry['status'] = 'failed'
             result_entry['message'] = "No valid candidates found"
@@ -1864,14 +1896,14 @@ async def main():
             logger.info("Generating final report...")
             generate_report()
 
-def rank_all_results(responses: List[Dict[str, Any]], artist: str, album: str, track: str = None) -> List[Dict[str, Any]]:
+def rank_all_results(responses: List[Dict[str, Any]], artist: str, album: str = None, track: str = None) -> List[Dict[str, Any]]:
     """
     Rank all valid results from all users based on format priority, cleanliness, and size.
     
     Args:
         responses: List of response objects from search API
         artist: Artist name for matching
-        album: Album name for matching
+        album: Optional album name for matching
         track: Optional track name for matching
         
     Returns:
@@ -1896,18 +1928,28 @@ def rank_all_results(responses: List[Dict[str, Any]], artist: str, album: str, t
             
             # Check if this file matches what we're looking for
             match_found = False
-            if track:
+            if track and album:
+                # Full match: artist, album, and track
                 if EXACT_MATCH:
                     match_found = is_exact_match(filename, artist, album, track)
                 else:
+                    match_found = track.lower() in filename.lower() and album.lower() in filename.lower()
+            elif track and not album:
+                # Artist-track match: just check artist and track
+                if EXACT_MATCH:
+                    match_found = is_exact_match(filename, artist, "", track)
+                else:
                     match_found = track.lower() in filename.lower()
-            else:
-                # For albums, just check album name
+            elif album and not track:
+                # Artist-album match: just check artist and album
                 match_found = album.lower() in filename.lower()
+            else:
+                # Shouldn't happen based on our validation, but fallback
+                match_found = artist.lower() in filename.lower()
             
             if match_found:
                 # Score the filename cleanliness
-                cleanliness_score = score_filename_cleanliness(filename, artist, album, track)
+                cleanliness_score = score_filename_cleanliness(filename, artist, album or "", track or "")
                 
                 # Create candidate entry with all necessary information
                 candidate = {
