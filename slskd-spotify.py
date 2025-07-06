@@ -16,6 +16,25 @@ Supports single-track or full-album queueing with advanced features:
 - Queue management with configurable limits
 - Filename sanitization for special characters
 
+API Key Loading:
+----------------
+This script requires an API key to access your SLSKD server. The API key can be provided in one of two ways:
+
+1. Environment Variable (Recommended for CI/servers):
+   Set the environment variable `SLSKD_API_KEY` before running the script:
+       export SLSKD_API_KEY=your-api-key-here
+       python3 slskd-spotify.py
+
+2. api.txt File (Recommended for local use):
+   Create a file named `api.txt` in the same directory as this script and put your API key in it (no quotes, no extra whitespace):
+       your-api-key-here
+   The script will automatically read the key from this file if the environment variable is not set.
+
+Security Notes:
+- The `api.txt` file is included in `.gitignore` and will not be committed to version control.
+- Never share your API key or commit it to a public repository.
+- If neither the environment variable nor the `api.txt` file is found, the script will log an error and exit.
+
 Command-line Options:
 ------------------
   -h, --help            Show this help message and exit
