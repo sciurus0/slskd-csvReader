@@ -141,8 +141,8 @@ def detect_encoding(file_path: str) -> str:
         The detected encoding or 'utf-8' as fallback
     """
     # Prioritize UTF-8 variants and Unicode-aware encodings
-    # Note: utf-16 variants require BOM, so we'll try them last
-    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
+    # Note: utf-8-sig handles BOM automatically, utf-16 variants require BOM
+    encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
     
     for encoding in encodings:
         try:
@@ -781,8 +781,8 @@ def generate_report():
         
         # Try multiple encodings for reading the headers
         # Prioritize UTF-8 variants and Unicode-aware encodings
-        # Note: utf-16 variants require BOM, so we'll try them last
-        encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
+        # Note: utf-8-sig handles BOM automatically, utf-16 variants require BOM
+        encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
         for encoding in encodings:
             try:
                 with open(CSV_FILE, 'r', newline='', encoding=encoding) as f:
@@ -889,8 +889,8 @@ def count_csv_rows(file_path):
     """Count the total number of rows in the CSV file."""
     # Try multiple encodings in order of likelihood
     # Prioritize UTF-8 variants and Unicode-aware encodings
-    # Note: utf-16 variants require BOM, so we'll try them last
-    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
+    # Note: utf-8-sig handles BOM automatically, utf-16 variants require BOM
+    encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
     
     for encoding in encodings:
         try:
@@ -1399,7 +1399,7 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
             # Try multiple encodings
             # Prioritize UTF-8 variants and Unicode-aware encodings
             # Note: utf-16 variants require BOM, so we'll try them last
-            encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
+            encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
             success = False
             
             for encoding in encodings:
