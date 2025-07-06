@@ -14,6 +14,26 @@ Supports single-track or full-album queueing with advanced features:
 - Retry-failed mode for failed downloads
 - Download status monitoring
 - Queue management with configurable limits
+- Filename sanitization for special characters
+
+API Key Loading:
+----------------
+This script requires an API key to access your SLSKD server. The API key can be provided in one of two ways:
+
+1. Environment Variable (Recommended for CI/servers):
+   Set the environment variable `SLSKD_API_KEY` before running the script:
+       export SLSKD_API_KEY=your-api-key-here
+       python3 slskd-spotify.py
+
+2. api.txt File (Recommended for local use):
+   Create a file named `api.txt` in the same directory as this script and put your API key in it (no quotes, no extra whitespace):
+       your-api-key-here
+   The script will automatically read the key from this file if the environment variable is not set.
+
+Security Notes:
+- The `api.txt` file is included in `.gitignore` and will not be committed to version control.
+- Never share your API key or commit it to a public repository.
+- If neither the environment variable nor the `api.txt` file is found, the script will log an error and exit.
 
 Command-line Options:
 ------------------
@@ -124,8 +144,85 @@ from asyncio import TimeoutError
 from logging.handlers import RotatingFileHandler
 from typing import Dict, List, Tuple, Optional, Any, Union, Set, Callable, Awaitable
 import re
+import unicodedata
 
 import slskd_api
+
+# ======== Filename Sanitization ========
+def detect_encoding(file_path: str) -> str:
+    """
+    Detect the encoding of a file by trying multiple encodings.
+    
+    Args:
+        file_path: Path to the file to detect encoding for
+        
+    Returns:
+        The detected encoding or 'utf-8' as fallback
+    """
+    # Prioritize UTF-8 variants and Unicode-aware encodings
+    # Note: utf-8-sig handles BOM automatically, utf-16 variants require BOM
+    encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
+    
+    for encoding in encodings:
+        try:
+            with open(file_path, 'r', newline='', encoding=encoding) as f:
+                # Try to read a small sample to test the encoding
+                sample = f.read(1024)
+                # If we get here, the encoding worked
+                logger.info(f"Detected encoding for {file_path}: {encoding}")
+                return encoding
+        except UnicodeDecodeError:
+            logger.debug(f"Failed to decode {file_path} with {encoding} encoding")
+            continue
+        except Exception as e:
+            logger.warning(f"Error testing {encoding} encoding for {file_path}: {e}")
+            continue
+    
+    logger.warning(f"Could not detect encoding for {file_path}, using utf-8 as fallback")
+    return 'utf-8'
+
+def sanitize_filename(name: str, replacement: str = " ") -> str:
+    """
+    Sanitize a filename by replacing forbidden characters with spaces.
+    Preserves Unicode characters like accented letters, Japanese, Chinese, etc.
+    
+    Args:
+        name: The original filename/string to sanitize
+        replacement: Character to replace forbidden characters with (default: space)
+        
+    Returns:
+        Sanitized filename safe for all operating systems while preserving Unicode
+    """
+    if not name:
+        return ""
+    
+    # Normalize Unicode to handle weird invisible characters and ensure consistency
+    # NFKC: Normalization Form Compatibility Composition
+    # This combines characters and ensures consistent representation
+    name = unicodedata.normalize("NFKC", name)
+    
+    # Remove control characters (ASCII 0-31) but preserve Unicode control chars
+    # Only remove ASCII control chars, not Unicode ones
+    name = re.sub(r'[\x00-\x1f\x7f]', '', name)
+    
+    # Replace forbidden characters with replacement
+    # Windows: \ / : * ? " < > |
+    # Unix/Linux: / (null byte is already handled above)
+    # Note: We only replace filesystem-forbidden chars, not Unicode chars
+    forbidden = r'[\/:*?"<>|]'
+    name = re.sub(forbidden, replacement, name)
+    
+    # Remove trailing spaces and dots (Windows doesn't like these)
+    name = name.rstrip(" .")
+    
+    # Collapse multiple consecutive spaces into single space
+    name = re.sub(r'\s+', ' ', name)
+    
+    # Ensure the name isn't empty after sanitization
+    if not name.strip():
+        return "unnamed"
+    
+    return name.strip()
 
 # ======== Logging Setup ========
 log_dir = "logs"
@@ -702,7 +799,9 @@ def generate_report():
         original_fieldnames = []
         
         # Try multiple encodings for reading the headers
-        encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+        # Prioritize UTF-8 variants and Unicode-aware encodings
+        # Note: utf-8-sig handles BOM automatically, utf-16 variants require BOM
+        encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
         for encoding in encodings:
             try:
                 with open(CSV_FILE, 'r', newline='', encoding=encoding) as f:
@@ -710,8 +809,11 @@ def generate_report():
                     original_fieldnames = next(reader)  # Get header row
                 logger.info(f"Successfully read CSV headers with {encoding} encoding")
                 break
-            except UnicodeDecodeError:
-                logger.warning(f"Failed to decode CSV headers with {encoding} encoding, trying next...")
+            except UnicodeDecodeError as e:
+                if 'utf-16' in encoding and 'BOM' in str(e):
+                    logger.debug(f"Skipping {encoding} - file doesn't have BOM")
+                else:
+                    logger.warning(f"Failed to decode CSV headers with {encoding} encoding, trying next...")
             except Exception as e:
                 logger.warning(f"Could not read headers from input CSV with {encoding} encoding: {e}")
         
@@ -805,7 +907,9 @@ def generate_report_on_demand():
 def count_csv_rows(file_path):
     """Count the total number of rows in the CSV file."""
     # Try multiple encodings in order of likelihood
-    encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+    # Prioritize UTF-8 variants and Unicode-aware encodings
+    # Note: utf-8-sig handles BOM automatically, utf-16 variants require BOM
+    encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
     
     for encoding in encodings:
         try:
@@ -813,8 +917,11 @@ def count_csv_rows(file_path):
                 count = sum(1 for _ in csv.reader(f)) - 1  # Subtract header row
                 logger.info(f"Successfully read CSV with {encoding} encoding")
                 return count
-        except UnicodeDecodeError:
-            logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
+        except UnicodeDecodeError as e:
+            if 'utf-16' in encoding and 'BOM' in str(e):
+                logger.debug(f"Skipping {encoding} - file doesn't have BOM")
+            else:
+                logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
         except Exception as e:
             logger.error(f"Error counting CSV rows: {e}")
             return 0
@@ -1043,9 +1150,29 @@ async def process_row(client, row, row_index, total_rows):
         'fallback_used': False
     })
     
-    artist = (row.get('artist') or '').strip()
-    album = (row.get('album') or '').strip()
-    track = (row.get('track') or '').strip()
+    # Get raw values from CSV
+    raw_artist = (row.get('artist') or '').strip()
+    raw_album = (row.get('album') or '').strip()
+    raw_track = (row.get('track') or '').strip()
+    
+    # Log raw values for debugging Unicode issues
+    if any(ord(c) > 127 for c in raw_artist + raw_album + raw_track):
+        logger.info(f"Found Unicode characters in row {row_index}:")
+        logger.info(f"  Raw artist: {repr(raw_artist)}")
+        logger.info(f"  Raw album: {repr(raw_album)}")
+        logger.info(f"  Raw track: {repr(raw_track)}")
+    
+    # Sanitize artist, album, and track names to handle special characters
+    artist = sanitize_filename(raw_artist)
+    album = sanitize_filename(raw_album)
+    track = sanitize_filename(raw_track)
+    
+    # Log sanitized values for debugging
+    if any(ord(c) > 127 for c in artist + album + track):
+        logger.info(f"After sanitization:")
+        logger.info(f"  Artist: {repr(artist)}")
+        logger.info(f"  Album: {repr(album)}")
+        logger.info(f"  Track: {repr(track)}")
     
     if not artist or not album:
         result_entry['message'] = "Incomplete row"
@@ -1152,7 +1279,9 @@ def load_failed_rows(results_csv):
     failed_rows = []
     
     # Try multiple encodings
-    encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+    # Prioritize UTF-8 variants and Unicode-aware encodings
+    # Note: utf-16 variants require BOM, so we'll try them last
+    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
     success = False
     
     for encoding in encodings:
@@ -1174,8 +1303,11 @@ def load_failed_rows(results_csv):
             success = True
             logger.info(f"Successfully read results CSV with {encoding} encoding")
             break
-        except UnicodeDecodeError:
-            logger.warning(f"Failed to decode results CSV with {encoding} encoding, trying next...")
+        except UnicodeDecodeError as e:
+            if 'utf-16' in encoding and 'BOM' in str(e):
+                logger.debug(f"Skipping {encoding} - file doesn't have BOM")
+            else:
+                logger.warning(f"Failed to decode results CSV with {encoding} encoding, trying next...")
         except Exception as e:
             logger.error(f"Error loading failed rows with {encoding} encoding: {e}")
     
@@ -1230,7 +1362,9 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
         if total_rows > 1000:
             logger.info(f"Large file detected ({total_rows} rows). Using streaming mode.")
             # Try multiple encodings for large files
-            encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+            # Prioritize UTF-8 variants and Unicode-aware encodings
+            # Note: utf-16 variants require BOM, so we'll try them last
+            encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
             success = False
             
             for encoding in encodings:
@@ -1264,8 +1398,11 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
                     success = True
                     logger.info(f"Successfully processed CSV with {encoding} encoding")
                     break
-                except UnicodeDecodeError:
-                    logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
+                except UnicodeDecodeError as e:
+                    if 'utf-16' in encoding and 'BOM' in str(e):
+                        logger.debug(f"Skipping {encoding} - file doesn't have BOM")
+                    else:
+                        logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
                 except Exception as e:
                     logger.error(f"Error processing CSV with {encoding} encoding: {e}")
             
@@ -1279,7 +1416,9 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
         else:
             # For smaller files, load everything into memory
             # Try multiple encodings
-            encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+            # Prioritize UTF-8 variants and Unicode-aware encodings
+            # Note: utf-16 variants require BOM, so we'll try them last
+            encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
             success = False
             
             for encoding in encodings:
@@ -1295,8 +1434,11 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
                     success = True
                     logger.info(f"Successfully read CSV with {encoding} encoding")
                     break
-                except UnicodeDecodeError:
-                    logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
+                except UnicodeDecodeError as e:
+                    if 'utf-16' in encoding and 'BOM' in str(e):
+                        logger.debug(f"Skipping {encoding} - file doesn't have BOM")
+                    else:
+                        logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
                 except Exception as e:
                     logger.error(f"Error reading CSV with {encoding} encoding: {e}")
             
