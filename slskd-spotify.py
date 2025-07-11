@@ -295,6 +295,13 @@ CIRCUIT_BREAKER_TIMEOUT = 300           # Seconds to wait after circuit breaks b
 USE_DIRECT_API = False                  # Whether to use direct API calls instead of client library
 EXACT_MATCH = False                     # Whether to require exact matching for track names
 
+# Circuit breaker state
+circuit_breaker_state = {
+    'consecutive_errors': 0,
+    'circuit_open': False,
+    'circuit_open_time': 0
+}
+
 # Strict prioritization for audio formats - only these formats will be considered
 ALLOWED_FORMATS = ['.mp3', '.m4a', '.flac']  # In order of priority
 
@@ -391,41 +398,8 @@ class Stats:
 stats = Stats()
 results_log = []  # To track detailed results for reporting
 queued_files_tracker = []  # Global list to track all queued files for status checking
-status_monitor_task = None  # Global reference to the status monitoring task
 
-def debug_enqueue_direct_api(username, file_id):
-    """Try to enqueue a file directly using the REST API instead of the client library."""
-    url = f"{HOST.rstrip('/')}{API_PATH}/transfers/downloads/{username}"
-    logger.info(f"DEBUG: Sending direct API request to: {url}")
-    
-    # Try different payload formats
-    # Format 1: Array of IDs
-    payload1 = [file_id]
-    
-    # Format 2: Object with SearchResultIds property (array)
-    payload2 = {"SearchResultIds": [file_id], "Source": SOURCE}
-    
-    # Format 3: QueueDownloadRequest format
-    payload3 = {"Username": username, "SearchResultIds": [file_id], "Source": SOURCE}
 
-    payloads = [payload1, payload2, payload3]
-    
-    for i, payload in enumerate(payloads, 1):
-        try:
-            logger.info(f"DEBUG: Trying payload format {i}: {json.dumps(payload)}")
-            resp = requests.post(url, json=payload, headers=HEADERS)
-            if resp.status_code == 200:
-                logger.info(f"DEBUG: Success with payload format {i}")
-                return True
-            else:
-                logger.error(f"DEBUG: Failed with payload format {i}: {resp.status_code} {resp.reason}")
-                if resp.text:
-                    logger.error(f"DEBUG: Response: {resp.text}")
-        except Exception as e:
-            logger.error(f"DEBUG: Exception with payload format {i}: {e}")
-    
-    logger.error("DEBUG: All payload formats failed")
-    return False
 
 
 async def poll_responses_async(job_id):
@@ -448,8 +422,6 @@ async def poll_responses_async(job_id):
                 await asyncio.sleep(EXTENDED_POLL_INTERVAL)
                 extended_poll_count += 1
                 if extended_poll_count >= MAX_EXTENDED_POLLS:
-                    # Comment out debug output
-                    # logger.info(f"Completed extended polling, collected {len(initial_results)} responses")
                     # We've done our extended polling, return all results
                     return initial_results
             else:
@@ -480,16 +452,12 @@ async def poll_responses_async(job_id):
                             found_new = True
                     
                     if found_new:
-                        # Comment out debug output
-                        # logger.info(f"Extended polling found additional results (now {len(initial_results)} responses)")
                         pass
                     
                 # Check if first result has files with the expected format
                 if results and len(results) > 0 and 'files' in results[0]:
                     first_file = results[0]['files'][0] if results[0]['files'] else None
                     if first_file:
-                        # Comment out debug output
-                        # logger.debug(f"Example file structure: {first_file}")
                         pass
         except Exception as e:
             logger.warning(f"Error during polling: {e}")
@@ -504,17 +472,17 @@ async def search_slskd_async(pattern):
     logger.info(f"⬢ POST {post_url} payload: {{'SearchText': '{pattern}'}}")
     
     # Circuit breaker pattern to prevent excessive retries when service is down
-    global consecutive_errors
-    if hasattr(search_slskd_async, 'circuit_open') and search_slskd_async.circuit_open:
+    global circuit_breaker_state
+    if circuit_breaker_state['circuit_open']:
         current_time = time.time()
-        if current_time - search_slskd_async.circuit_open_time < CIRCUIT_BREAKER_TIMEOUT:
+        if current_time - circuit_breaker_state['circuit_open_time'] < CIRCUIT_BREAKER_TIMEOUT:
             logger.warning("Circuit breaker open, skipping API call")
             return []
         else:
             # Reset circuit breaker after timeout
             logger.info("Circuit breaker timeout expired, resetting")
-            search_slskd_async.circuit_open = False
-            search_slskd_async.consecutive_errors = 0
+            circuit_breaker_state['circuit_open'] = False
+            circuit_breaker_state['consecutive_errors'] = 0
     
     retries = 0
     while retries <= MAX_RETRIES:
@@ -534,8 +502,7 @@ async def search_slskd_async(pattern):
                 raise RuntimeError(f"No job ID returned by POST: {data}")
             
             # Reset circuit breaker on success
-            if hasattr(search_slskd_async, 'consecutive_errors'):
-                search_slskd_async.consecutive_errors = 0
+            circuit_breaker_state['consecutive_errors'] = 0
             
             # Apply rate limiting
             await asyncio.sleep(RATE_LIMIT_DELAY)
@@ -552,15 +519,13 @@ async def search_slskd_async(pattern):
             retries += 1
             
             # Update consecutive errors for circuit breaker
-            if not hasattr(search_slskd_async, 'consecutive_errors'):
-                search_slskd_async.consecutive_errors = 0
-            search_slskd_async.consecutive_errors += 1
+            circuit_breaker_state['consecutive_errors'] += 1
             
             # Check if circuit breaker threshold reached
-            if search_slskd_async.consecutive_errors >= CIRCUIT_BREAKER_THRESHOLD:
+            if circuit_breaker_state['consecutive_errors'] >= CIRCUIT_BREAKER_THRESHOLD:
                 logger.error(f"Circuit breaker threshold reached after {CIRCUIT_BREAKER_THRESHOLD} consecutive errors")
-                search_slskd_async.circuit_open = True
-                search_slskd_async.circuit_open_time = time.time()
+                circuit_breaker_state['circuit_open'] = True
+                circuit_breaker_state['circuit_open_time'] = time.time()
                 return []
             
             if retries > MAX_RETRIES:
@@ -573,33 +538,7 @@ async def search_slskd_async(pattern):
     return []
 
 
-def select_best(responses: List[Dict[str, Any]], album_name: str) -> Optional[namedtuple]:
-    """
-    From search responses, pick best match by filename or largest size.
-    
-    Args:
-        responses: List of response objects from search API
-        album_name: Album name to match in filenames
-        
-    Returns:
-        namedtuple with username, result_id and filename, or None if no matches
-    """
-    candidates = []
-    alb_lower = album_name.lower()
-    for r in responses:
-        user = r.get('username')
-        rid = r.get('id') or r.get('SearchResultId') or r.get('token')
-        for f in r.get('files', []):
-            fn = f.get('filename')
-            size = f.get('size', 0)
-            candidates.append((user, rid, size, fn))
-    if not candidates:
-        return None
-    for user, rid, _, fn in candidates:
-        if alb_lower in (fn or '').lower():
-            return Result(user, rid, fn)
-    user, rid, _, fn = max(candidates, key=lambda x: x[2])
-    return Result(user, rid, fn)
+
 
 
 def initialize_slskd_client() -> slskd_api.SlskdClient:
@@ -651,8 +590,8 @@ async def enqueue_files_async(client: slskd_api.SlskdClient,
             file_info_list = file_ids
             logger.info(f"Sending file IDs: {file_ids}")
         
-        # Use direct API calls if specified or fall back to it on failure
-        if USE_DIRECT_API or True:  # Always try direct API first
+        # Use direct API calls if specified
+        if USE_DIRECT_API:
             try:
                 post_url = f"{HOST.rstrip('/')}{API_PATH}/transfers/downloads/{username}"
                 logger.debug(f"Direct API call to: {post_url}")
@@ -686,8 +625,8 @@ async def enqueue_files_async(client: slskd_api.SlskdClient,
                         }
                         
                         # Add search terms that can help identify the file later
-                        if hasattr(file_info, '_search_terms'):
-                            tracked_file['search_terms'] = file_info._search_terms
+                        if '_search_terms' in file_info:
+                            tracked_file['search_terms'] = file_info['_search_terms']
                         
                         queued_files_tracker.append(tracked_file)
                 
@@ -965,8 +904,6 @@ def get_priority_group(filename):
 def debug_print_file_priorities(files, log_all=False):
     """Print file priorities for debugging."""
     if not files:
-        # Comment out debug output
-        # logger.debug("No files to prioritize")
         return
         
     priorities = {}
@@ -987,16 +924,7 @@ def debug_print_file_priorities(files, log_all=False):
             priority_name = "Unknown"
             
         if num_files > 0:  # Only log if we have files in this category
-            if log_all:
-                # Comment out debug output
-                # logger.debug(f"{priority_name} ({num_files}): {priorities[p]}")
-                pass
-            else:
-                # Just log the first few filenames to avoid cluttering the logs
-                sample = priorities[p][:5]
-                # Comment out debug output
-                # logger.debug(f"{priority_name} ({num_files}), examples: {sample}")
-                pass
+            pass
 
 
 def is_exact_match(filename, artist, album, track):
@@ -1246,10 +1174,16 @@ async def process_row(client, row, row_index, total_rows):
         files_queued = 0
         
         # Get ranked list of all candidates
-        ranked_candidates = rank_all_results(resp_list, artist, album if album else None, track if track else None)
+        ranked_candidates, rejection_reasons = rank_all_results(resp_list, artist, album if album else None, track if track else None)
         if not ranked_candidates:
             result_entry['status'] = 'failed'
-            result_entry['message'] = "No valid candidates found"
+            if rejection_reasons:
+                from collections import Counter
+                reason_counts = Counter(rejection_reasons)
+                reason_summary = "; ".join(f"{count} file(s): {reason}" for reason, count in reason_counts.items())
+                result_entry['message'] = f"No valid candidates found: {reason_summary}"
+            else:
+                result_entry['message'] = "No valid candidates found"
             results_log.append(result_entry)
             logger.info(f"No valid candidates found for: {pattern}")
             return False
@@ -1791,7 +1725,7 @@ async def main():
     # Declare globals at the beginning of the function
     global CSV_FILE, BATCH_SIZE, RATE_LIMIT_DELAY, stats, results_log, log_dir
     global EXCLUDED_EXTENSIONS, ALLOWED_FORMATS, QUEUE_LIMIT
-    global USE_DIRECT_API, EXACT_MATCH, status_monitor_task
+    global USE_DIRECT_API, EXACT_MATCH
     
     parser = argparse.ArgumentParser(description="Queue albums or tracks from CSV to SLSKD")
     parser.add_argument("--csv", "-c", default=CSV_FILE, help="Path to CSV file (default: to_queue.csv)")
@@ -1868,110 +1802,79 @@ async def main():
             stats.enqueued_files = checkpoint['stats']['enqueued_files']
             results_log = checkpoint['results_log']
     
-    # Comment out status monitoring
-    # if not args.no_status_check and args.status_check > 0:
-    #     # Start as background task that won't block the main script
-    #     status_monitor_task = asyncio.create_task(start_status_monitoring(args.status_check))
-    #     logger.info(f"Download status monitoring enabled (checking every {args.status_check} seconds)")
-    # else:
-    #     logger.info("Download status monitoring disabled")
+
     
     try:
         await process_csv(CSV_FILE, start_row, args.retry_failed)
     finally:
-        # Comment out status monitoring cleanup
-        # if status_monitor_task and not status_monitor_task.done():
-        #     try:
-        #         # Run one more status check if we have queued files
-        #         if queued_files_tracker:
-        #             logger.info("Running final status check...")
-        #             await check_downloads_status()
-        #         # Cancel the monitoring task
-        #         status_monitor_task.cancel()
-        #     except Exception:
-        #         pass
-                
         # Always try to generate the report, even if an exception occurs
         if results_log:
             logger.info("Generating final report...")
             generate_report()
 
-def rank_all_results(responses: List[Dict[str, Any]], artist: str, album: str = None, track: str = None) -> List[Dict[str, Any]]:
+def rank_all_results(responses: List[Dict[str, Any]], artist: str, album: Optional[str] = None, track: Optional[str] = None):
     """
     Rank all valid results from all users based on format priority, cleanliness, and size.
-    
-    Args:
-        responses: List of response objects from search API
-        artist: Artist name for matching
-        album: Optional album name for matching
-        track: Optional track name for matching
-        
-    Returns:
-        List of ranked candidates, each containing complete file and user information
+    Also returns a list of rejection reasons if no valid candidates are found.
     """
     all_candidates = []
+    rejection_reasons = []
     
     for response in responses:
         username = response.get('username')
-        
         for file_info in response.get('files', []):
             filename = file_info.get('filename', '')
-            
+            reason = None
             # Skip excluded extensions
             if file_has_excluded_extension(filename, EXCLUDED_EXTENSIONS):
+                reason = f"excluded extension: {os.path.splitext(filename)[1]}"
+                rejection_reasons.append(reason)
                 continue
-                
             # Get format priority (999 if not in allowed formats)
             priority = get_priority_group(filename)
             if priority >= len(ALLOWED_FORMATS):
+                reason = f"not allowed format: {os.path.splitext(filename)[1]}"
+                rejection_reasons.append(reason)
                 continue
-            
             # Check if this file matches what we're looking for
             match_found = False
             if track and album:
-                # Full match: artist, album, and track
                 if EXACT_MATCH:
                     match_found = is_exact_match(filename, artist, album, track)
                 else:
                     match_found = track.lower() in filename.lower() and album.lower() in filename.lower()
             elif track and not album:
-                # Artist-track match: just check artist and track
                 if EXACT_MATCH:
                     match_found = is_exact_match(filename, artist, "", track)
                 else:
                     match_found = track.lower() in filename.lower()
             elif album and not track:
-                # Artist-album match: just check artist and album
                 match_found = album.lower() in filename.lower()
             else:
-                # Shouldn't happen based on our validation, but fallback
                 match_found = artist.lower() in filename.lower()
-            
-            if match_found:
-                # Score the filename cleanliness
-                cleanliness_score = score_filename_cleanliness(filename, artist, album or "", track or "")
-                
-                # Create candidate entry with all necessary information
-                candidate = {
-                    'username': username,
-                    'filename': filename,
-                    'size': file_info.get('size', 0),
-                    'priority': priority,
-                    'cleanliness': cleanliness_score,
-                    'file_id': file_info.get('id') or file_info.get('file_id'),
-                    'original_response': response,  # Keep original response data
-                    'file_info': file_info  # Keep complete file info
-                }
-                
-                all_candidates.append(candidate)
-    
+            if not match_found:
+                reason = "no match for search criteria"
+                rejection_reasons.append(reason)
+                continue
+            # Score the filename cleanliness
+            cleanliness_score = score_filename_cleanliness(filename, artist, album or "", track or "")
+            candidate = {
+                'username': username,
+                'filename': filename,
+                'size': file_info.get('size', 0),
+                'priority': priority,
+                'cleanliness': cleanliness_score,
+                'file_id': file_info.get('id') or file_info.get('file_id'),
+                'original_response': response,
+                'file_info': file_info
+            }
+            all_candidates.append(candidate)
     # Sort candidates by priority (format), then cleanliness, then size
     all_candidates.sort(key=lambda x: (
-        x['priority'],  # Lower priority (format) is better
-        -x['cleanliness'],  # Higher cleanliness is better
-        -x['size']  # Larger size is better
+        x['priority'],
+        -x['cleanliness'],
+        -x['size']
     ))
-    
     # Log the ranking results
     if all_candidates:
         logger.info(f"Ranked {len(all_candidates)} valid candidates")
@@ -1986,8 +1889,8 @@ def rank_all_results(responses: List[Dict[str, Any]], artist: str, album: str = 
                        f"Size: {candidate['size']:,} bytes")
     else:
         logger.info("No valid candidates found")
-    
-    return all_candidates
+    # Return both candidates and rejection reasons
+    return all_candidates, rejection_reasons
 
 async def check_queue_status(username: str) -> Tuple[bool, int]:
     """
