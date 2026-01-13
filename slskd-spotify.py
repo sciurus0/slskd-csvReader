@@ -1842,7 +1842,25 @@ def rank_all_results(responses: List[Dict[str, Any]], artist: str, album: Option
                 if EXACT_MATCH:
                     match_found = is_exact_match(filename, artist, album, track)
                 else:
-                    match_found = track.lower() in filename.lower() and album.lower() in filename.lower()
+                    # Special case: when album and track names are the same,
+                    # require the string to appear at least twice to ensure
+                    # we match "Artist - Album - Track" structure, not just
+                    # any file containing that string once
+                    track_lower = track.lower()
+                    album_lower = album.lower()
+                    filename_lower = filename.lower()
+                    
+                    if track_lower == album_lower:
+                        # Count occurrences of the matching string
+                        count = filename_lower.count(track_lower)
+                        # Require at least 2 occurrences (one for album, one for track)
+                        # Also ensure artist is present
+                        match_found = (count >= 2 and 
+                                     artist.lower() in filename_lower and
+                                     track_lower in filename_lower)
+                    else:
+                        # Normal case: album and track are different
+                        match_found = track_lower in filename_lower and album_lower in filename_lower
             elif track and not album:
                 if EXACT_MATCH:
                     match_found = is_exact_match(filename, artist, "", track)
