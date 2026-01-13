@@ -83,6 +83,15 @@ Command-line Options:
                         When enabled, only files with exact matches to the specified pattern are selected
                         When disabled (default), files that contain the track name are selected
 
+  --album-preferred-search
+                        Use broader search with album preference and quality filtering
+                        Searches for Artist-Track (broader) instead of Artist-Album-Track (strict)
+                        Prioritizes files where album appears in the path (directory or filename)
+                        Falls back to files without album match when no better option exists
+                        Automatically filters out unwanted versions (remixes, live, covers, etc.)
+                        unless explicitly requested in the search query
+                        Increases success rate while maintaining quality control
+
   --queue-limit N       Maximum items in queue per user (default: 0)
                         Set to 0 for no limit
                         Use to prevent overloading specific users' queues
@@ -121,6 +130,9 @@ Examples:
   
   # Use exact matching for tracks
   python slskd-spotify.py --exact-match
+  
+  # Use album-preferred search for higher success rate
+  python slskd-spotify.py --album-preferred-search
   
   # Set a queue limit of 50 items per user
   python slskd-spotify.py --queue-limit 50
@@ -294,6 +306,7 @@ CIRCUIT_BREAKER_THRESHOLD = 5           # Number of consecutive errors before ci
 CIRCUIT_BREAKER_TIMEOUT = 300           # Seconds to wait after circuit breaks before retrying
 USE_DIRECT_API = False                  # Whether to use direct API calls instead of client library
 EXACT_MATCH = False                     # Whether to require exact matching for track names
+ALBUM_PREFERRED_SEARCH = False          # Whether to use album-preferred search with track fallback
 
 # Circuit breaker state
 circuit_breaker_state = {
@@ -773,7 +786,8 @@ def generate_report():
             'candidate_cleanliness',
             'candidate_username',
             'user_attempt',
-            'user_selected'
+            'user_selected',
+            'has_album_match'
         ])
             
         # Ensure log directory exists
@@ -798,7 +812,8 @@ def generate_report():
                 
                 # Add fallback tracking fields
                 for field in ['attempts', 'fallback_used', 'candidate_used', 'candidate_format', 
-                             'candidate_cleanliness', 'candidate_username', 'user_attempt', 'user_selected']:
+                             'candidate_cleanliness', 'candidate_username', 'user_attempt', 'user_selected',
+                             'has_album_match']:
                     row[field] = result.get(field, '')
                 
                 writer.writerow(row)
@@ -1141,9 +1156,15 @@ async def process_row(client, row, row_index, total_rows):
     
     # Determine search pattern based on available information
     if album and track:
-        # Full information: Artist - Album - Track
-        pattern = f"{artist} - {album} - {track}"
-        search_type = "artist-album-track"
+        if ALBUM_PREFERRED_SEARCH:
+            # Album-preferred mode: Search with Artist - Track (broader)
+            # Album will be used for filtering/preference, not search
+            pattern = f"{artist} - {track}"
+            search_type = "artist-track-with-album-preference"
+        else:
+            # Standard mode: Artist - Album - Track
+            pattern = f"{artist} - {album} - {track}"
+            search_type = "artist-album-track"
     elif album and not track:
         # Album download: Artist - Album
         pattern = f"{artist} - {album}"
@@ -1173,8 +1194,13 @@ async def process_row(client, row, row_index, total_rows):
         
         files_queued = 0
         
+        # Detect search intent for quality filtering
+        search_intent = detect_search_intent(artist, album or "", track or "")
+        
         # Get ranked list of all candidates
-        ranked_candidates, rejection_reasons = rank_all_results(resp_list, artist, album if album else None, track if track else None)
+        ranked_candidates, rejection_reasons = rank_all_results(
+            resp_list, artist, album if album else None, track if track else None, search_intent
+        )
         if not ranked_candidates:
             result_entry['status'] = 'failed'
             if rejection_reasons:
@@ -1192,6 +1218,10 @@ async def process_row(client, row, row_index, total_rows):
             # Group all tracks from the same best user
             best_username = ranked_candidates[0]['username']
             album_tracks = [c for c in ranked_candidates if c['username'] == best_username]
+            
+            # Store album match status for album downloads
+            if ALBUM_PREFERRED_SEARCH:
+                result_entry['has_album_match'] = ranked_candidates[0].get('has_album_match', False)
             
             # Check queue availability
             has_open_slot, queue_count = await check_queue_status(best_username)
@@ -1214,11 +1244,21 @@ async def process_row(client, row, row_index, total_rows):
                 return False
             
             files_queued = await enqueue_files_async(client, best_candidate['username'], [best_candidate['file_info']])
+            
+            # Store album match status for reporting
+            if ALBUM_PREFERRED_SEARCH and best_candidate:
+                result_entry['has_album_match'] = best_candidate.get('has_album_match', False)
         
         if files_queued > 0:
             result_entry['status'] = 'success'
             result_entry['files_queued'] = files_queued
-            result_entry['message'] = f"Successfully queued {files_queued} file(s)"
+            
+            # Update message to indicate if this was a fallback
+            if ALBUM_PREFERRED_SEARCH and not result_entry.get('has_album_match', True):
+                result_entry['message'] = f"Successfully queued {files_queued} file(s) [FALLBACK - no album match]"
+            else:
+                result_entry['message'] = f"Successfully queued {files_queued} file(s)"
+            
             results_log.append(result_entry)
             return True
         else:
@@ -1725,7 +1765,7 @@ async def main():
     # Declare globals at the beginning of the function
     global CSV_FILE, BATCH_SIZE, RATE_LIMIT_DELAY, stats, results_log, log_dir
     global EXCLUDED_EXTENSIONS, ALLOWED_FORMATS, QUEUE_LIMIT
-    global USE_DIRECT_API, EXACT_MATCH
+    global USE_DIRECT_API, EXACT_MATCH, ALBUM_PREFERRED_SEARCH
     
     parser = argparse.ArgumentParser(description="Queue albums or tracks from CSV to SLSKD")
     parser.add_argument("--csv", "-c", default=CSV_FILE, help="Path to CSV file (default: to_queue.csv)")
@@ -1746,6 +1786,8 @@ async def main():
     parser.add_argument("--direct-api", action="store_true", help="Use direct API calls instead of client library")
     parser.add_argument("--gen-report", action="store_true", help="Generate a report without processing new files")
     parser.add_argument("--exact-match", action="store_true", help="Require exact artist-album-track matching")
+    parser.add_argument("--album-preferred-search", action="store_true",
+                        help="Use broader search (Artist-Track) with album preference and quality filtering")
     parser.add_argument("--queue-limit", type=int, default=QUEUE_LIMIT,
                         help="Maximum items in queue per user (0 for no limit, default: 0)")
     args = parser.parse_args()
@@ -1762,10 +1804,14 @@ async def main():
     EXCLUDED_EXTENSIONS = args.exclude
     USE_DIRECT_API = args.direct_api
     EXACT_MATCH = args.exact_match
+    ALBUM_PREFERRED_SEARCH = args.album_preferred_search
     QUEUE_LIMIT = args.queue_limit
     
     if EXACT_MATCH:
         logger.info("Exact matching mode enabled - only exact artist-album-track matches will be selected")
+    
+    if ALBUM_PREFERRED_SEARCH:
+        logger.info("Album-preferred search mode enabled - broader search with album preference and quality filtering")
     
     logger.info(f"Allowed formats (in priority order): {ALLOWED_FORMATS}")
     logger.info(f"Excluded formats: {EXCLUDED_EXTENSIONS}")
@@ -1812,11 +1858,105 @@ async def main():
             logger.info("Generating final report...")
             generate_report()
 
-def rank_all_results(responses: List[Dict[str, Any]], artist: str, album: Optional[str] = None, track: Optional[str] = None):
+def detect_search_intent(artist: str, album: str, track: str) -> Dict[str, bool]:
+    """
+    Detect if user is explicitly searching for live/remix/cover/etc versions.
+    
+    Args:
+        artist: Artist name
+        album: Album name (may be empty)
+        track: Track name (may be empty)
+        
+    Returns:
+        Dictionary with boolean flags for each version type
+    """
+    # Combine all search terms
+    search_terms = f"{artist} {album} {track}".lower()
+    
+    # Context-aware detection
+    # Check if album suggests live recordings (unplugged, live at, etc.)
+    album_suggests_live = album and any(term in album.lower() for term in 
+                                        ['live', 'unplugged', 'concert', 'mtv unplugged', 'in concert'])
+    
+    return {
+        'allow_remix': 'remix' in search_terms or 'remixed' in search_terms or 're-mix' in search_terms,
+        'allow_live': 'live' in search_terms or album_suggests_live,
+        'allow_cover': 'cover' in search_terms,
+        'allow_acoustic': 'acoustic' in search_terms,
+        'allow_instrumental': 'instrumental' in search_terms,
+        'allow_demo': 'demo' in search_terms,
+        'allow_karaoke': 'karaoke' in search_terms,
+    }
+
+def should_reject_version(filename: str, track: str, search_intent: Dict[str, bool]) -> Optional[str]:
+    """
+    Check if file contains unwanted version markers.
+    
+    Args:
+        filename: Full file path
+        track: Track name from search query
+        search_intent: Dictionary of allowed version types
+        
+    Returns:
+        Rejection reason string if file should be rejected, None if acceptable
+    """
+    if not ALBUM_PREFERRED_SEARCH:
+        # Quality filtering only active in album-preferred mode
+        return None
+        
+    # Get just the filename (not full path) for checking
+    basename = os.path.basename(filename).lower()
+    
+    # Get track words to avoid false positives (e.g., "Live Wire" contains "live")
+    track_words = set(track.lower().split()) if track else set()
+    
+    # Define suspicious patterns with word boundaries to avoid false positives
+    suspicious_patterns = {
+        'remix': (r'\b(remix|remixed|re-mix)\b', search_intent.get('allow_remix', False)),
+        'live': (r'\b(live|concert)\b', search_intent.get('allow_live', False)),
+        'cover': (r'\bcover\b', search_intent.get('allow_cover', False)),
+        'acoustic': (r'\bacoustic\b', search_intent.get('allow_acoustic', False)),
+        'instrumental': (r'\binstrumental\b', search_intent.get('allow_instrumental', False)),
+        'demo': (r'\bdemo\b', search_intent.get('allow_demo', False)),
+        'alternate': (r'\b(alternate|alternative|alt\s+version)\b', False),
+        'edit': (r'\b(radio\s+edit|extended|club\s+mix|dj\s+mix)\b', False),
+        'karaoke': (r'\bkaraoke\b', search_intent.get('allow_karaoke', False)),
+        'tribute': (r'\btribute\b', False),
+    }
+    
+    for pattern_name, (pattern, is_allowed) in suspicious_patterns.items():
+        match = re.search(pattern, basename)
+        if match:
+            matched_word = match.group(0)
+            
+            # Check if matched word is part of the track name itself
+            # (e.g., track is "Live Wire", shouldn't reject for containing "live")
+            if matched_word in track_words:
+                continue
+            
+            # If user didn't request this version type, reject it
+            if not is_allowed:
+                return f"unwanted version: {pattern_name}"
+    
+    return None
+
+def rank_all_results(responses: List[Dict[str, Any]], artist: str, album: Optional[str] = None, track: Optional[str] = None, search_intent: Optional[Dict[str, bool]] = None):
     """
     Rank all valid results from all users based on format priority, cleanliness, and size.
     Also returns a list of rejection reasons if no valid candidates are found.
+    
+    Args:
+        responses: List of search responses from the API
+        artist: Artist name
+        album: Album name (optional)
+        track: Track name (optional)
+        search_intent: Dictionary of allowed version types (for quality filtering)
+    
+    Returns:
+        Tuple of (ranked_candidates, rejection_reasons)
     """
+    if search_intent is None:
+        search_intent = {}
     all_candidates = []
     rejection_reasons = []
     
@@ -1836,12 +1976,27 @@ def rank_all_results(responses: List[Dict[str, Any]], artist: str, album: Option
                 reason = f"not allowed format: {os.path.splitext(filename)[1]}"
                 rejection_reasons.append(reason)
                 continue
+            
+            # Check for unwanted versions (remix, live, etc.) if in album-preferred mode
+            if ALBUM_PREFERRED_SEARCH:
+                rejection_reason = should_reject_version(filename, track or "", search_intent)
+                if rejection_reason:
+                    rejection_reasons.append(rejection_reason)
+                    continue
+            
             # Check if this file matches what we're looking for
             match_found = False
             if track and album:
                 if EXACT_MATCH:
                     match_found = is_exact_match(filename, artist, album, track)
+                elif ALBUM_PREFERRED_SEARCH:
+                    # Album-preferred mode: only require track in path
+                    # Album is checked later for preference, not filtering
+                    track_lower = track.lower()
+                    filename_lower = filename.lower()
+                    match_found = track_lower in filename_lower
                 else:
+                    # Standard mode: require both album and track
                     # Special case: when album and track names are the same,
                     # require the string to appear at least twice to ensure
                     # we match "Artist - Album - Track" structure, not just
@@ -1876,35 +2031,59 @@ def rank_all_results(responses: List[Dict[str, Any]], artist: str, album: Option
                 continue
             # Score the filename cleanliness
             cleanliness_score = score_filename_cleanliness(filename, artist, album or "", track or "")
+            
+            # Check if album appears in the full path (for album-preferred mode)
+            has_album_match = album and album.lower() in filename.lower() if album else False
+            
             candidate = {
                 'username': username,
                 'filename': filename,
                 'size': file_info.get('size', 0),
                 'priority': priority,
                 'cleanliness': cleanliness_score,
+                'has_album_match': has_album_match,
                 'file_id': file_info.get('id') or file_info.get('file_id'),
                 'original_response': response,
                 'file_info': file_info
             }
             all_candidates.append(candidate)
-    # Sort candidates by priority (format), then cleanliness, then size
-    all_candidates.sort(key=lambda x: (
-        x['priority'],
-        -x['cleanliness'],
-        -x['size']
-    ))
+    
+    # Sort candidates
+    if ALBUM_PREFERRED_SEARCH:
+        # Album-preferred mode: prioritize album matches before format
+        # Sort by: album match (True first) → format → cleanliness → size
+        all_candidates.sort(key=lambda x: (
+            not x.get('has_album_match', False),  # False sorts before True, so invert
+            x['priority'],
+            -x['cleanliness'],
+            -x['size']
+        ))
+    else:
+        # Standard mode: format priority first
+        all_candidates.sort(key=lambda x: (
+            x['priority'],
+            -x['cleanliness'],
+            -x['size']
+        ))
     # Log the ranking results
     if all_candidates:
         logger.info(f"Ranked {len(all_candidates)} valid candidates")
+        
+        # Show album match summary if in album-preferred mode
+        if ALBUM_PREFERRED_SEARCH:
+            album_matches = sum(1 for c in all_candidates if c.get('has_album_match', False))
+            logger.info(f"  {album_matches} with album match, {len(all_candidates) - album_matches} without")
+        
         top_n = min(5, len(all_candidates))
         logger.info(f"Top {top_n} candidates:")
         for i, candidate in enumerate(all_candidates[:top_n], 1):
             format_type = ALLOWED_FORMATS[candidate['priority']]
+            album_indicator = " [ALBUM MATCH]" if candidate.get('has_album_match', False) else ""
             logger.info(f"  {i}. {os.path.basename(candidate['filename'])} "
                        f"from {candidate['username']} - "
                        f"Format: {format_type}, "
                        f"Cleanliness: {candidate['cleanliness']:.1f}, "
-                       f"Size: {candidate['size']:,} bytes")
+                       f"Size: {candidate['size']:,} bytes{album_indicator}")
     else:
         logger.info("No valid candidates found")
     # Return both candidates and rejection reasons
