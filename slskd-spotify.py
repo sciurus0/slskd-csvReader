@@ -153,12 +153,13 @@ import pickle
 import asyncio
 import concurrent.futures
 from asyncio import TimeoutError
-from logging.handlers import RotatingFileHandler
 from typing import Dict, List, Tuple, Optional, Any, Union, Set, Callable, Awaitable
 import re
 import unicodedata
 
 import slskd_api
+
+from slskd_logging import DEFAULT_OUTPUT_DIR, logger, setup_logging
 
 # ======== Filename Sanitization ========
 def detect_encoding(file_path: str) -> str:
@@ -236,55 +237,9 @@ def sanitize_filename(name: str, replacement: str = " ") -> str:
     
     return name.strip()
 
-# ======== Logging Setup ========
-log_dir = "logs"
-if not os.path.exists(log_dir):
-    os.makedirs(log_dir)
-
-log_filename = os.path.join(log_dir, f"slskd_import_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-# Initialize logger without handlers (these will be added by setup_logging)
-logger = logging.getLogger(__name__)
-
-# Setup log rotation (keep 10 log files of 10MB each)
-def setup_logging(log_level=logging.INFO):
-    """Setup logging with proper configuration and log rotation"""
-    global logger
-    
-    # Remove existing handlers to prevent duplicate output
-    for handler in logger.handlers[:]:
-        handler.close()  # Properly close the handler
-        logger.removeHandler(handler)
-        
-    # Create handlers with proper formatting
-    log_format = '%(asctime)s %(levelname)s: %(message)s'
-    formatter = logging.Formatter(log_format)
-    
-    # File handler with rotation
-    file_handler = RotatingFileHandler(
-        log_filename, 
-        maxBytes=10*1024*1024,  # 10MB
-        backupCount=10          # Keep 10 files
-    )
-    file_handler.setFormatter(formatter)
-    
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    
-    # Configure logger
-    logger.setLevel(log_level)
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-    
-    # Prevent propagation to root logger
-    logger.propagate = False
-    
-    # Suppress verbose logging from libraries
-    logging.getLogger("requests").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-    
-    logger.info(f"Logging initialized at level: {logging.getLevelName(log_level)}")
-    logger.info(f"Log file: {log_filename}")
+# ======== Logging ========
+# log_dir is set in main() from setup_logging(); use DEFAULT_OUTPUT_DIR for parser default
+log_dir = DEFAULT_OUTPUT_DIR
 
 # ======== Configuration ========
 HOST = "http://localhost:5030"          # Base URL of your SLSKD server
@@ -1780,8 +1735,8 @@ async def main():
                         help=f"Allowed file formats in priority order (default: {ALLOWED_FORMATS})")
     parser.add_argument("--exclude", "-e", nargs="+", default=EXCLUDED_EXTENSIONS,
                         help=f"File extensions to exclude entirely (default: {EXCLUDED_EXTENSIONS})")
-    parser.add_argument("--output-dir", "-o", default=log_dir,
-                        help=f"Directory for output files (default: {log_dir})")
+    parser.add_argument("--output-dir", "-o", default=DEFAULT_OUTPUT_DIR,
+                        help=f"Directory for output files (default: {DEFAULT_OUTPUT_DIR})")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--direct-api", action="store_true", help="Use direct API calls instead of client library")
     parser.add_argument("--gen-report", action="store_true", help="Generate a report without processing new files")
@@ -1792,9 +1747,9 @@ async def main():
                         help="Maximum items in queue per user (0 for no limit, default: 0)")
     args = parser.parse_args()
     
-    # Setup logging based on debug flag
+    # Setup logging based on debug flag (also creates output dir and sets log_dir)
     log_level = logging.DEBUG if args.debug else logging.INFO
-    setup_logging(log_level)
+    _, log_dir = setup_logging(log_level, args.output_dir)
     
     # Update global configuration based on arguments
     CSV_FILE = args.csv
@@ -1818,10 +1773,6 @@ async def main():
     
     if USE_DIRECT_API:
         logger.info("Direct API mode enabled - bypassing client library")
-        
-    log_dir = args.output_dir
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
     
     # Check if user just wants to generate a report
     if args.gen_report:
