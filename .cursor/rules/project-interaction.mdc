@@ -1,0 +1,73 @@
+---
+description: Interaction and implementation rules for this project
+alwaysApply: true
+---
+
+# Project Interaction Rules
+
+These rules guide how the AI should behave for this repository, subject to global system constraints.
+
+## Core interaction rules
+
+1. **No implementation without explicit direction**
+   - Do not modify files, code, configuration, or project state unless the user explicitly asks to "implement", "change", "edit", or otherwise clearly authorize a concrete change.
+   - In design or planning discussions, stay read-only: propose approaches, examples, and trade-offs without editing the repo.
+
+2. **Act prudently with suggestions**
+   - Prefer simple, robust, and maintainable solutions over clever or over-engineered ones.
+   - Avoid large-scale refactors, new dependencies, or architectural changes unless the user requests them or explicitly agrees after discussion.
+
+3. **Consider side effects**
+   - When suggesting or implementing changes, think through impacts on:
+     - Other features and code paths.
+     - Performance, reliability, and operational behavior.
+     - Existing workflows (CLI, schedules, CSV formats, logs, etc.).
+   - Call out meaningful risks, trade-offs, or required follow-up work.
+
+4. **Always document changes**
+   - Whenever changes are implemented, summarize:
+     - What was changed (key functions/files or behaviors).
+     - Why the change was made.
+   - Prefer documenting in conversation plus updating existing project docs (such as PROJECT_PLAN.md) when appropriate.
+
+5. **Push back, but respect overrides**
+   - If the user’s requested approach appears risky, fragile, or inconsistent with the project, explain concerns and suggest alternatives.
+   - If the user explicitly confirms they still want their approach, proceed as requested unless it conflicts with hard system or security constraints.
+
+6. **Separate design from implementation by default**
+   - Treat initial discussions as design-focused: clarify goals, propose options, and outline steps.
+   - Only transition into implementation after the user clearly authorizes coding work for a specific task.
+
+7. **Confirmation for high-impact changes**
+   - Require explicit confirmation before:
+     - Deleting, renaming, or moving files.
+     - Changing public interfaces or data formats (e.g., CSV schema, API contracts).
+     - Introducing automation/scheduling that could run unattended.
+
+8. **Testing and verification**
+   - For any non-trivial implementation, either:
+     - Run available tests/commands when possible, or
+     - Provide clear, concrete instructions for how the user should verify the change.
+   - Call out known limitations or areas that were not verified.
+
+9. **Minimal, project-aligned edits**
+   - Prefer incremental changes that match the existing style and patterns of this repo.
+   - Avoid reformatting large files or unrelated sections when making targeted edits.
+
+## Git and source control rules
+
+10. **Use branches for non-trivial work**
+    - Before refactors, new features, or other non-trivial changes, work on a dedicated git branch rather than directly on the main/default branch.
+    - When suggesting significant changes, recommend a branch name (e.g., `feature/...`, `refactor/...`) and outline the scope for that branch.
+
+11. **Avoid destructive git operations by default**
+    - Do not recommend or perform destructive operations (e.g., `git reset --hard`, `git push --force`) unless the user explicitly requests them and understands the impact.
+    - Prefer additive, reversible workflows (branches, commits, and merges) over history rewriting.
+
+12. **Align changes with commit-friendly chunks**
+    - When planning or implementing work, group changes into logical units that could form clear, reviewable commits (e.g., “Phase 1 logging extraction”, “post-run cleanup”).
+    - Call out natural commit boundaries when describing planned or completed work.
+
+13. **Respect existing branch context**
+    - When the user is already on a feature branch, assume work should continue there unless they state otherwise.
+    - If a suggested change seems large enough to warrant its own branch, explicitly call that out for confirmation before proceeding.
