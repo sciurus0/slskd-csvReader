@@ -149,7 +149,6 @@ import inspect
 import argparse
 from collections import namedtuple
 from datetime import datetime
-import pickle
 import asyncio
 import concurrent.futures
 from asyncio import TimeoutError
@@ -169,6 +168,31 @@ from slskd_csv import (
     generate_report_on_demand,
     find_most_recent_results_csv,
     load_failed_rows,
+)
+from slskd_config import (
+    HOST,
+    API_PATH,
+    API_KEY,
+    CSV_FILE,
+    QUEUE_LIMIT,
+    RATE_LIMIT_DELAY,
+    BATCH_SIZE,
+    MAX_RETRIES,
+    SEARCH_TIMEOUT,
+    ENQUEUE_TIMEOUT,
+    CHECKPOINT_FILE,
+    EXCLUDED_EXTENSIONS,
+    CIRCUIT_BREAKER_THRESHOLD,
+    CIRCUIT_BREAKER_TIMEOUT,
+    USE_DIRECT_API,
+    EXACT_MATCH,
+    ALBUM_PREFERRED_SEARCH,
+    ALLOWED_FORMATS,
+    POLL_INTERVAL,
+    MAX_POLLS,
+    SOURCE,
+    make_headers,
+    initial_circuit_breaker_state,
 )
 
 # ======== Filename Sanitization ========
@@ -221,49 +245,12 @@ def sanitize_filename(name: str, replacement: str = " ") -> str:
 log_dir = DEFAULT_OUTPUT_DIR
 
 # ======== Configuration ========
-HOST = "http://localhost:5030"          # Base URL of your SLSKD server
-API_PATH = "/api/v0"                    # API prefix path (used by direct requests)
-# Load API key from environment variable for security, fall back to hardcoded value
-API_KEY = os.environ.get("SLSKD_API_KEY", "your-api-key-here")  # Your SLSKD API key
-CSV_FILE = "to_queue.csv"               # CSV should contain columns: artist, album, [track]
-QUEUE_LIMIT = 0                         # Maximum items in queue per user (0 for no limit)
-
-# ======== Advanced Configuration ========
-RATE_LIMIT_DELAY = 1.0                  # Seconds to wait between API calls
-BATCH_SIZE = 10                         # Number of rows to process in each batch
-MAX_RETRIES = 3                         # Maximum retry attempts for failed operations
-SEARCH_TIMEOUT = 60                     # Timeout in seconds for search operations
-ENQUEUE_TIMEOUT = 30                    # Timeout in seconds for enqueue operations
-CHECKPOINT_FILE = "checkpoint.pkl"      # File to save progress for resuming
-EXCLUDED_EXTENSIONS = ['.lrc']          # File extensions to exclude entirely
-CIRCUIT_BREAKER_THRESHOLD = 5           # Number of consecutive errors before circuit breaks
-CIRCUIT_BREAKER_TIMEOUT = 300           # Seconds to wait after circuit breaks before retrying
-USE_DIRECT_API = False                  # Whether to use direct API calls instead of client library
-EXACT_MATCH = False                     # Whether to require exact matching for track names
-ALBUM_PREFERRED_SEARCH = False          # Whether to use album-preferred search with track fallback
+# Defaults are imported from slskd_config and may be overridden by CLI args.
 
 # Circuit breaker state
-circuit_breaker_state = {
-    'consecutive_errors': 0,
-    'circuit_open': False,
-    'circuit_open_time': 0
-}
+circuit_breaker_state = initial_circuit_breaker_state()
 
-# Strict prioritization for audio formats - only these formats will be considered
-ALLOWED_FORMATS = ['.mp3', '.m4a', '.flac']  # In order of priority
-
-HEADERS = {
-    "X-API-KEY": API_KEY,
-    "Accept": "application/json",
-    "Content-Type": "application/json"
-}
-
-POLL_INTERVAL = 2    # seconds between polling search responses
-MAX_POLLS = 20       # maximum poll attempts per search
-
-# Default source identifier for queueing downloads
-# Must match one of the DownloadSource enum values in SLSKD
-SOURCE = "HeadphonesVip"
+HEADERS = make_headers(API_KEY)
 
 # Named tuple for best match
 Result = namedtuple('Result', ['username','result_id','filename'])
