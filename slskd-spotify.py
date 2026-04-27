@@ -160,39 +160,18 @@ import unicodedata
 import slskd_api
 
 from slskd_logging import DEFAULT_OUTPUT_DIR, logger, setup_logging
+from slskd_csv import (
+    detect_encoding,
+    count_csv_rows,
+    save_checkpoint,
+    load_checkpoint,
+    generate_report,
+    generate_report_on_demand,
+    find_most_recent_results_csv,
+    load_failed_rows,
+)
 
 # ======== Filename Sanitization ========
-def detect_encoding(file_path: str) -> str:
-    """
-    Detect the encoding of a file by trying multiple encodings.
-    
-    Args:
-        file_path: Path to the file to detect encoding for
-        
-    Returns:
-        The detected encoding or 'utf-8' as fallback
-    """
-    # Prioritize UTF-8 variants and Unicode-aware encodings
-    # Note: utf-8-sig handles BOM automatically, utf-16 variants require BOM
-    encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
-    
-    for encoding in encodings:
-        try:
-            with open(file_path, 'r', newline='', encoding=encoding) as f:
-                # Try to read a small sample to test the encoding
-                sample = f.read(1024)
-                # If we get here, the encoding worked
-                logger.info(f"Detected encoding for {file_path}: {encoding}")
-                return encoding
-        except UnicodeDecodeError:
-            logger.debug(f"Failed to decode {file_path} with {encoding} encoding")
-            continue
-        except Exception as e:
-            logger.warning(f"Error testing {encoding} encoding for {file_path}: {e}")
-            continue
-    
-    logger.warning(f"Could not detect encoding for {file_path}, using utf-8 as fallback")
-    return 'utf-8'
 
 def sanitize_filename(name: str, replacement: str = " ") -> str:
     """
@@ -643,203 +622,6 @@ async def enqueue_files_async(client: slskd_api.SlskdClient,
         return 0
 
 
-def save_checkpoint(row_index: int, total_rows: int) -> None:
-    """
-    Save progress to a checkpoint file for resuming later.
-    
-    Args:
-        row_index: Current row index being processed
-        total_rows: Total number of rows in the CSV
-    """
-    checkpoint_data = {
-        'row_index': row_index,
-        'total_rows': total_rows,
-        'timestamp': datetime.now().isoformat(),
-        'stats': stats.to_dict(),
-        'results_log': results_log
-    }
-    
-    try:
-        with open(CHECKPOINT_FILE, 'wb') as f:
-            pickle.dump(checkpoint_data, f)
-        logger.info(f"Checkpoint saved at row {row_index}/{total_rows}")
-    except Exception as e:
-        logger.error(f"Error saving checkpoint: {e}")
-
-
-def load_checkpoint() -> Optional[Dict[str, Any]]:
-    """
-    Load progress from a checkpoint file.
-    
-    Returns:
-        Dictionary with checkpoint data or None if no checkpoint exists
-    """
-    try:
-        if os.path.exists(CHECKPOINT_FILE):
-            with open(CHECKPOINT_FILE, 'rb') as f:
-                checkpoint_data = pickle.load(f)
-            logger.info(f"Checkpoint loaded: row {checkpoint_data['row_index']}/{checkpoint_data['total_rows']}")
-            return checkpoint_data
-        else:
-            logger.info("No checkpoint file found")
-            return None
-    except Exception as e:
-        logger.error(f"Error loading checkpoint: {e}")
-        return None
-
-
-def generate_report():
-    """Generate a CSV report of all processed entries that mirrors the input CSV format with added status columns."""
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    report_file = os.path.join(log_dir, f"results_{timestamp}.csv")
-    input_csv_basename = os.path.basename(CSV_FILE)
-    
-    try:
-        if not results_log:
-            logger.warning("No results to report. Report will not be generated.")
-            return
-
-        # Create absolute paths for the report files
-        report_file_abs = os.path.abspath(report_file)
-        
-        # Read the original headers from the input CSV
-        original_fieldnames = []
-        
-        # Try multiple encodings for reading the headers
-        # Prioritize UTF-8 variants and Unicode-aware encodings
-        # Note: utf-8-sig handles BOM automatically, utf-16 variants require BOM
-        encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
-        for encoding in encodings:
-            try:
-                with open(CSV_FILE, 'r', newline='', encoding=encoding) as f:
-                    reader = csv.reader(f)
-                    original_fieldnames = next(reader)  # Get header row
-                logger.info(f"Successfully read CSV headers with {encoding} encoding")
-                break
-            except UnicodeDecodeError as e:
-                if 'utf-16' in encoding and 'BOM' in str(e):
-                    logger.debug(f"Skipping {encoding} - file doesn't have BOM")
-                else:
-                    logger.warning(f"Failed to decode CSV headers with {encoding} encoding, trying next...")
-            except Exception as e:
-                logger.warning(f"Could not read headers from input CSV with {encoding} encoding: {e}")
-        
-        if not original_fieldnames:
-            # Default headers if we can't read the original
-            logger.warning("Using default headers as original headers couldn't be read")
-            original_fieldnames = ['artist', 'album', 'track']
-        
-        # Output headers: original headers + status columns
-        output_fieldnames = original_fieldnames + ['status', 'message', 'files_queued', 'timestamp']
-        
-        # Add fallback tracking columns
-        output_fieldnames.extend([
-            'attempts',
-            'fallback_used',
-            'candidate_used',
-            'candidate_format',
-            'candidate_cleanliness',
-            'candidate_username',
-            'user_attempt',
-            'user_selected',
-            'has_album_match'
-        ])
-            
-        # Ensure log directory exists
-        os.makedirs(log_dir, exist_ok=True)
-        
-        # Write to the new report file - always use UTF-8 for output
-        with open(report_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=output_fieldnames)
-            writer.writeheader()
-            
-            # Write each result row
-            for result in results_log:
-                # Ensure we have all original fields (even if empty)
-                row = {field: result.get(field, '') for field in original_fieldnames}
-                # Add the status fields
-                row.update({
-                    'status': result.get('status', ''),
-                    'message': result.get('message', ''),
-                    'files_queued': result.get('files_queued', 0),
-                    'timestamp': result.get('timestamp', '')
-                })
-                
-                # Add fallback tracking fields
-                for field in ['attempts', 'fallback_used', 'candidate_used', 'candidate_format', 
-                             'candidate_cleanliness', 'candidate_username', 'user_attempt', 'user_selected',
-                             'has_album_match']:
-                    row[field] = result.get(field, '')
-                
-                writer.writerow(row)
-        
-        # Also create a copy with the same filename pattern as the input but with a _results suffix
-        base, ext = os.path.splitext(input_csv_basename)
-        matching_report = os.path.join(log_dir, f"{base}_results{ext}")
-        matching_report_abs = os.path.abspath(matching_report)
-        
-        import shutil
-        shutil.copy2(report_file, matching_report)
-        
-        logger.info(f"CSV Reports generated:")
-        logger.info(f"  1. Timestamped report: {report_file_abs}")
-        logger.info(f"  2. Input-matched report: {matching_report_abs}")
-        
-        # Print a direct terminal message too for visibility
-        print(f"\nCSV Reports generated:")
-        print(f"  1. Timestamped report: {report_file_abs}")
-        print(f"  2. Input-matched report: {matching_report_abs}\n")
-        
-        return report_file_abs, matching_report_abs
-    except Exception as e:
-        logger.error(f"Error generating report: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return None, None
-
-
-# Create a separate function to generate reports on demand
-def generate_report_on_demand():
-    """Generate a report explicitly when called, even outside the normal process flow."""
-    logger.info("Generating CSV report on demand...")
-    if not results_log:
-        logger.warning("No results to report. No rows have been processed yet.")
-        return
-        
-    report_paths = generate_report()
-    if report_paths:
-        logger.info("Report generation completed successfully.")
-    else:
-        logger.error("Failed to generate reports.")
-
-
-def count_csv_rows(file_path):
-    """Count the total number of rows in the CSV file."""
-    # Try multiple encodings in order of likelihood
-    # Prioritize UTF-8 variants and Unicode-aware encodings
-    # Note: utf-8-sig handles BOM automatically, utf-16 variants require BOM
-    encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
-    
-    for encoding in encodings:
-        try:
-            with open(file_path, newline='', encoding=encoding) as f:
-                count = sum(1 for _ in csv.reader(f)) - 1  # Subtract header row
-                logger.info(f"Successfully read CSV with {encoding} encoding")
-                return count
-        except UnicodeDecodeError as e:
-            if 'utf-16' in encoding and 'BOM' in str(e):
-                logger.debug(f"Skipping {encoding} - file doesn't have BOM")
-            else:
-                logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
-        except Exception as e:
-            logger.error(f"Error counting CSV rows: {e}")
-            return 0
-    
-    # If all encodings fail
-    logger.error(f"Could not read CSV file with any encoding: {file_path}")
-    return 0
-
-
 def file_has_excluded_extension(filename, excluded_extensions):
     """Check if a file has one of the excluded extensions."""
     if not filename:
@@ -1230,73 +1012,6 @@ async def process_row(client, row, row_index, total_rows):
         return False
 
 
-def find_most_recent_results_csv():
-    """Find the most recent results CSV file in the log directory."""
-    try:
-        result_files = []
-        for filename in os.listdir(log_dir):
-            if filename.endswith(".csv") and ("results_" in filename or "_results" in filename):
-                file_path = os.path.join(log_dir, filename)
-                result_files.append((file_path, os.path.getmtime(file_path)))
-        
-        if not result_files:
-            logger.error(f"No results CSV files found in {log_dir}")
-            return None
-            
-        # Sort by modification time (newest first)
-        result_files.sort(key=lambda x: x[1], reverse=True)
-        newest_file = result_files[0][0]
-        logger.info(f"Found most recent results file: {newest_file}")
-        return newest_file
-    except Exception as e:
-        logger.error(f"Error finding most recent results CSV: {e}")
-        return None
-
-
-def load_failed_rows(results_csv):
-    """Load rows that failed in the previous run from a results CSV file."""
-    failed_rows = []
-    
-    # Try multiple encodings
-    # Prioritize UTF-8 variants and Unicode-aware encodings
-    # Note: utf-16 variants require BOM, so we'll try them last
-    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1', 'utf-16', 'utf-16-le', 'utf-16-be']
-    success = False
-    
-    for encoding in encodings:
-        try:
-            with open(results_csv, 'r', newline='', encoding=encoding) as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    # Get the status from the row
-                    status = row.get('status', '').lower()
-                    
-                    # If status is failed or error, add this row to retry
-                    if status in ('failed', 'error'):
-                        # Create a new row without the status columns
-                        clean_row = {k: v for k, v in row.items() 
-                                    if k not in ('status', 'message', 'files_queued', 'timestamp')}
-                        failed_rows.append(clean_row)
-            
-            # If we reached here without exception, we succeeded
-            success = True
-            logger.info(f"Successfully read results CSV with {encoding} encoding")
-            break
-        except UnicodeDecodeError as e:
-            if 'utf-16' in encoding and 'BOM' in str(e):
-                logger.debug(f"Skipping {encoding} - file doesn't have BOM")
-            else:
-                logger.warning(f"Failed to decode results CSV with {encoding} encoding, trying next...")
-        except Exception as e:
-            logger.error(f"Error loading failed rows with {encoding} encoding: {e}")
-    
-    if not success and not failed_rows:
-        logger.error(f"Could not read results CSV with any encoding: {results_csv}")
-    
-    logger.info(f"Loaded {len(failed_rows)} failed rows for retry")
-    return failed_rows
-
-
 async def process_csv(csv_file, start_row=0, retry_failed=False):
     """Process the CSV file in batches with error handling and resumability.
     
@@ -1316,7 +1031,7 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
     
     if retry_failed:
         # Find most recent results CSV
-        results_csv = find_most_recent_results_csv()
+        results_csv = find_most_recent_results_csv(log_dir)
         if not results_csv:
             logger.error("Cannot find results CSV file for retry-failed mode")
             sys.exit(1)
@@ -1371,7 +1086,7 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
                                 batch = []
                                 
                                 # Save checkpoint
-                                save_checkpoint(i, total_rows)
+                                save_checkpoint(CHECKPOINT_FILE, i, total_rows, stats, results_log)
                     
                     # If we reached here without exception, we succeeded
                     success = True
@@ -1390,7 +1105,7 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
                 sys.exit(1)
             
             # Final report
-            generate_report()
+            generate_report(CSV_FILE, results_log, log_dir)
             return
         else:
             # For smaller files, load everything into memory
@@ -1443,7 +1158,7 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
         logger.info(f"Total files enqueued: {stats.enqueued_files}")
         logger.info("="*50)
         
-        generate_report()
+        generate_report(CSV_FILE, results_log, log_dir)
 
 
 async def process_batch(client, rows, start_index, total_rows):
@@ -1479,7 +1194,7 @@ async def process_batch(client, rows, start_index, total_rows):
             
             # Save checkpoint every 5 rows processed
             if row_index % 5 == 0 or row_index == total_rows:
-                save_checkpoint(row_index, total_rows)
+                save_checkpoint(CHECKPOINT_FILE, row_index, total_rows, stats, results_log)
                 
             # Print progress report every 20 items
             if stats.total_processed % 20 == 0:
@@ -1776,11 +1491,11 @@ async def main():
     
     # Check if user just wants to generate a report
     if args.gen_report:
-        checkpoint = load_checkpoint()
+        checkpoint = load_checkpoint(CHECKPOINT_FILE)
         if checkpoint and 'results_log' in checkpoint:
             results_log = checkpoint['results_log']
             logger.info(f"Loaded {len(results_log)} entries from checkpoint for report generation")
-            generate_report_on_demand()
+            generate_report_on_demand(CSV_FILE, results_log, log_dir)
             return
         else:
             logger.error("No checkpoint found to generate report from")
@@ -1789,7 +1504,7 @@ async def main():
     # Process with or without resuming
     start_row = 0
     if args.resume and not args.retry_failed:
-        checkpoint = load_checkpoint()
+        checkpoint = load_checkpoint(CHECKPOINT_FILE)
         if checkpoint:
             start_row = checkpoint['row_index']
             # Use the globals already declared at the beginning
@@ -1807,7 +1522,7 @@ async def main():
         # Always try to generate the report, even if an exception occurs
         if results_log:
             logger.info("Generating final report...")
-            generate_report()
+            generate_report(CSV_FILE, results_log, log_dir)
 
 def detect_search_intent(artist: str, album: str, track: str) -> Dict[str, bool]:
     """
