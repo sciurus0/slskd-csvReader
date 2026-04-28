@@ -169,6 +169,12 @@ from slskd_csv import (
     find_most_recent_results_csv,
     load_failed_rows,
 )
+from slskd_search import (
+    configure_search_context,
+    search_slskd_async,
+    detect_search_intent,
+    rank_all_results,
+)
 from slskd_config import (
     HOST,
     API_PATH,
@@ -192,7 +198,6 @@ from slskd_config import (
     MAX_POLLS,
     SOURCE,
     make_headers,
-    initial_circuit_breaker_state,
 )
 
 # ======== Filename Sanitization ========
@@ -246,9 +251,6 @@ log_dir = DEFAULT_OUTPUT_DIR
 
 # ======== Configuration ========
 # Defaults are imported from slskd_config and may be overridden by CLI args.
-
-# Circuit breaker state
-circuit_breaker_state = initial_circuit_breaker_state()
 
 HEADERS = make_headers(API_KEY)
 
@@ -332,145 +334,6 @@ class Stats:
 stats = Stats()
 results_log = []  # To track detailed results for reporting
 queued_files_tracker = []  # Global list to track all queued files for status checking
-
-
-
-
-async def poll_responses_async(job_id):
-    """Poll until the given search job has responses, then return them."""
-    base = f"{HOST.rstrip('/')}{API_PATH}/searches/{job_id}/responses"
-    
-    # Strategy: Continue polling longer to get more complete results
-    # First, poll quickly until we get any results (POLL_INTERVAL)
-    # Then, continue polling at a slower rate (EXTENDED_POLL_INTERVAL) to get more results
-    got_initial_results = False
-    initial_results = []
-    extended_poll_count = 0
-    EXTENDED_POLL_INTERVAL = 3.0  # Additional seconds to wait after initial results
-    MAX_EXTENDED_POLLS = 5  # Additional polls after finding initial results
-    
-    for poll_attempt in range(MAX_POLLS + MAX_EXTENDED_POLLS):
-        try:
-            # If we have initial results, use extended poll interval
-            if got_initial_results:
-                await asyncio.sleep(EXTENDED_POLL_INTERVAL)
-                extended_poll_count += 1
-                if extended_poll_count >= MAX_EXTENDED_POLLS:
-                    # We've done our extended polling, return all results
-                    return initial_results
-            else:
-                await asyncio.sleep(POLL_INTERVAL)
-            
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                resp = await asyncio.get_event_loop().run_in_executor(
-                    pool, lambda: requests.get(base, headers=HEADERS)
-                )
-            resp.raise_for_status()
-            data = resp.json()
-            if isinstance(data, dict):
-                results = data.get('responses') or data.get('Responses') or []
-            else:
-                results = data
-                
-            if results:
-                if not got_initial_results:
-                    logger.info(f"Got initial results ({len(results)} responses), continuing to poll for more complete results...")
-                    got_initial_results = True
-                    initial_results = results
-                else:
-                    # Add new results
-                    found_new = False
-                    for new_result in results:
-                        if not any(r.get('username') == new_result.get('username') for r in initial_results):
-                            initial_results.append(new_result)
-                            found_new = True
-                    
-                    if found_new:
-                        pass
-                    
-                # Check if first result has files with the expected format
-                if results and len(results) > 0 and 'files' in results[0]:
-                    first_file = results[0]['files'][0] if results[0]['files'] else None
-                    if first_file:
-                        pass
-        except Exception as e:
-            logger.warning(f"Error during polling: {e}")
-    
-    # Return what we've got, even if incomplete
-    return initial_results if got_initial_results else []
-
-
-async def search_slskd_async(pattern):
-    """Run a search with timeout and retry logic."""
-    post_url = f"{HOST.rstrip('/')}{API_PATH}/searches"
-    logger.info(f"⬢ POST {post_url} payload: {{'SearchText': '{pattern}'}}")
-    
-    # Circuit breaker pattern to prevent excessive retries when service is down
-    global circuit_breaker_state
-    if circuit_breaker_state['circuit_open']:
-        current_time = time.time()
-        if current_time - circuit_breaker_state['circuit_open_time'] < CIRCUIT_BREAKER_TIMEOUT:
-            logger.warning("Circuit breaker open, skipping API call")
-            return []
-        else:
-            # Reset circuit breaker after timeout
-            logger.info("Circuit breaker timeout expired, resetting")
-            circuit_breaker_state['circuit_open'] = False
-            circuit_breaker_state['consecutive_errors'] = 0
-    
-    retries = 0
-    while retries <= MAX_RETRIES:
-        try:
-            # Use timeout for the search request
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                resp = await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(
-                        pool, lambda: requests.post(post_url, json={"SearchText": pattern}, headers=HEADERS)
-                    ),
-                    timeout=SEARCH_TIMEOUT
-                )
-            resp.raise_for_status()
-            data = resp.json()
-            job_id = data.get('id') or data.get('SearchId')
-            if not job_id:
-                raise RuntimeError(f"No job ID returned by POST: {data}")
-            
-            # Reset circuit breaker on success
-            circuit_breaker_state['consecutive_errors'] = 0
-            
-            # Apply rate limiting
-            await asyncio.sleep(RATE_LIMIT_DELAY)
-            
-            # Poll for responses with timeout
-            responses = await asyncio.wait_for(
-                poll_responses_async(job_id),
-                timeout=SEARCH_TIMEOUT
-            )
-            return responses
-        
-        except (TimeoutError, requests.exceptions.RequestException, RuntimeError) as e:
-            logger.warning(f"Search operation error for '{pattern}': {e}. Retry {retries+1}/{MAX_RETRIES+1}")
-            retries += 1
-            
-            # Update consecutive errors for circuit breaker
-            circuit_breaker_state['consecutive_errors'] += 1
-            
-            # Check if circuit breaker threshold reached
-            if circuit_breaker_state['consecutive_errors'] >= CIRCUIT_BREAKER_THRESHOLD:
-                logger.error(f"Circuit breaker threshold reached after {CIRCUIT_BREAKER_THRESHOLD} consecutive errors")
-                circuit_breaker_state['circuit_open'] = True
-                circuit_breaker_state['circuit_open_time'] = time.time()
-                return []
-            
-            if retries > MAX_RETRIES:
-                logger.error(f"Max retries reached for '{pattern}'")
-                return []
-                
-            # Exponential backoff
-            await asyncio.sleep(RATE_LIMIT_DELAY * (2 ** retries))
-    
-    return []
-
 
 
 
@@ -607,229 +470,6 @@ async def enqueue_files_async(client: slskd_api.SlskdClient,
         logger.error(f"Client enqueue failed for {username}: {e}")
         logger.error(f"Failed payload: {search_results}")
         return 0
-
-
-def file_has_excluded_extension(filename, excluded_extensions):
-    """Check if a file has one of the excluded extensions."""
-    if not filename:
-        return False
-    return any(filename.lower().endswith(ext.lower()) for ext in excluded_extensions)
-
-
-def get_priority_group(filename):
-    """
-    Get the priority group for a file based on its extension.
-    
-    Returns:
-        0-2: Position in ALLOWED_FORMATS list (lower is better)
-        999: Not in allowed formats (will be skipped)
-    """
-    if not filename:
-        return 999
-        
-    # Skip excluded extensions first
-    if file_has_excluded_extension(filename, EXCLUDED_EXTENSIONS):
-        return 999
-        
-    # Check for allowed formats in priority order
-    for i, ext in enumerate(ALLOWED_FORMATS):
-        if filename.lower().endswith(ext.lower()):
-            return i
-            
-    # Not an allowed format
-    return 999
-
-
-def debug_print_file_priorities(files, log_all=False):
-    """Print file priorities for debugging."""
-    if not files:
-        return
-        
-    priorities = {}
-    for f in files:
-        filename = f.get('filename') or ''
-        priority = get_priority_group(filename)
-        if priority not in priorities:
-            priorities[priority] = []
-        priorities[priority].append(filename)
-    
-    for p in sorted(priorities.keys()):
-        num_files = len(priorities[p])
-        if p < len(ALLOWED_FORMATS) and p >= 0:
-            priority_name = f"{ALLOWED_FORMATS[p]} files"
-        elif p == 999:
-            priority_name = "Ignored format"
-        else:
-            priority_name = "Unknown"
-            
-        if num_files > 0:  # Only log if we have files in this category
-            pass
-
-
-def is_exact_match(filename, artist, album, track):
-    """
-    Check for exact match of artist, album, and track in filename.
-    
-    Args:
-        filename (str): The filename to check
-        artist (str): Artist name to match
-        album (str): Album name to match
-        track (str): Track name to match
-        
-    Returns:
-        bool: True if filename matches the pattern exactly, False otherwise
-    """
-    if not filename:
-        return False
-        
-    # Normalize strings for comparison
-    filename_lower = filename.lower()
-    artist_lower = artist.lower()
-    album_lower = album.lower()
-    track_lower = track.lower()
-    
-    # Most common pattern: "Artist - Album - Track"
-    expected_pattern = f"{artist_lower} - {album_lower} - {track_lower}"
-    
-    # Check for exact match (allowing for extension and path)
-    basename = os.path.basename(filename_lower)
-    file_without_ext = os.path.splitext(basename)[0]
-    
-    # Exact match
-    if file_without_ext == expected_pattern:
-        return True
-        
-    # Almost exact match (might have different spacing or punctuation)
-    # Replace multiple spaces with single space and remove common punctuation
-    def normalize(s):
-        s = s.replace('_', ' ').replace('.', ' ').replace('-', ' ')
-        return ' '.join(s.split())
-    
-    norm_file = normalize(file_without_ext)
-    norm_pattern = normalize(expected_pattern)
-    
-    return norm_file == norm_pattern
-
-
-def score_filename_cleanliness(filename, artist, album, track):
-    """
-    Score a filename based on how well it matches standard naming patterns.
-    Higher scores indicate cleaner, more matching filenames.
-    
-    Args:
-        filename (str): The filename to score
-        artist (str): Artist name to match
-        album (str): Album name to match (can be empty for artist-track searches)
-        track (str): Track name to match (can be empty for album searches)
-        
-    Returns:
-        float: A score from 0.0 (poor) to 10.0 (perfect match)
-    """
-    if not filename:
-        return 0.0
-    
-    # Start with a base score
-    score = 5.0
-    
-    # Get basename and remove extension
-    basename = os.path.basename(filename)
-    name_without_ext = os.path.splitext(basename)[0]
-    
-    # Convert everything to lowercase for comparison
-    name_lower = name_without_ext.lower()
-    artist_lower = artist.lower()
-    album_lower = album.lower()
-    track_lower = track.lower()
-    
-    # Check for exact matches based on available information
-    if album_lower and track_lower:
-        # Full perfect match "Artist - Album - Track"
-        perfect_pattern = f"{artist_lower} - {album_lower} - {track_lower}"
-        if name_lower == perfect_pattern:
-            score = 10.0  # Perfect score for perfect match
-            return score
-    elif track_lower and not album_lower:
-        # Artist-track perfect match "Artist - Track"
-        perfect_pattern = f"{artist_lower} - {track_lower}"
-        if name_lower == perfect_pattern:
-            score = 9.5  # High score for artist-track match
-            return score
-    elif album_lower and not track_lower:
-        # Artist-album perfect match "Artist - Album"
-        perfect_pattern = f"{artist_lower} - {album_lower}"
-        if name_lower == perfect_pattern:
-            score = 9.0  # High score for artist-album match
-            return score
-    
-    # Recognize track numbers in various formats
-    track_number_pattern = r'^\d{1,2}[-.\s]+'  # Matches "01 - ", "01. ", "01 ", etc.
-    track_number_match = re.search(track_number_pattern, name_lower)
-    if track_number_match:
-        score += 0.5  # Small bonus for having a track number prefix
-    
-    # Standard filename patterns (with track number variations)
-    # Escape artist, album and track names for regex safety
-    safe_artist = re.escape(artist_lower)
-    safe_album = re.escape(album_lower) if album_lower else ""
-    safe_track = re.escape(track_lower) if track_lower else ""
-    
-    if album_lower and track_lower:
-        # Full patterns with album and track
-        patterns = [
-            rf"{safe_artist} - {safe_album} - \d+[-.\s]+{safe_track}",  # Artist - Album - 01 - Track
-            rf"{safe_artist} - {safe_album} - {safe_track}",           # Artist - Album - Track
-        ]
-    elif track_lower and not album_lower:
-        # Artist-track patterns (no album)
-        patterns = [
-            rf"{safe_artist} - \d+[-.\s]+{safe_track}",                # Artist - 01 - Track
-            rf"{safe_artist} - {safe_track}",                          # Artist - Track
-            rf"\d+[-.\s]+{safe_artist} - {safe_track}",                # 01 - Artist - Track
-        ]
-    elif album_lower and not track_lower:
-        # Artist-album patterns (no track)
-        patterns = [
-            rf"{safe_artist} - {safe_album}",                          # Artist - Album
-        ]
-    else:
-        # Artist-only patterns
-        patterns = [
-            rf"{safe_artist}",                                         # Artist
-        ]
-    
-    for pattern in patterns:
-        if re.search(pattern, name_lower):
-            score += 1.5
-            break
-    
-    # Check if all required components are present (regardless of order)
-    if artist_lower in name_lower:
-        score += 1.0
-    else:
-        score -= 2.0  # Significant penalty for missing artist
-        
-    if track_lower and track_lower in name_lower:
-        score += 1.0
-    elif track_lower:
-        score -= 3.0  # Major penalty for missing track name
-        
-    if album_lower and album_lower in name_lower:
-        score += 0.5
-    
-    # Penalties for suspicious content
-    suspicious_terms = ["remix", "mix", "edit", "live", "cover", "instrumental", 
-                        "acoustic", "demo", "alternate", "dj", "radio edit", 
-                        "extended", "version"]
-    for term in suspicious_terms:
-        if term in name_lower:
-            score -= 1.5
-    
-    # Penalty for extremely long filenames (often indicate special versions)
-    if len(name_without_ext) > 60:
-        score -= 0.5
-    
-    # Ensure score stays within bounds
-    return max(0.0, min(score, 10.0))
 
 
 async def process_row(client, row, row_index, total_rows):
@@ -1463,6 +1103,24 @@ async def main():
     EXACT_MATCH = args.exact_match
     ALBUM_PREFERRED_SEARCH = args.album_preferred_search
     QUEUE_LIMIT = args.queue_limit
+
+    # Configure search/ranking module with runtime overrides
+    configure_search_context(
+        host=HOST,
+        api_path=API_PATH,
+        headers=HEADERS,
+        rate_limit_delay=RATE_LIMIT_DELAY,
+        max_retries=MAX_RETRIES,
+        search_timeout=SEARCH_TIMEOUT,
+        poll_interval=POLL_INTERVAL,
+        max_polls=MAX_POLLS,
+        circuit_breaker_threshold=CIRCUIT_BREAKER_THRESHOLD,
+        circuit_breaker_timeout=CIRCUIT_BREAKER_TIMEOUT,
+        album_preferred_search=ALBUM_PREFERRED_SEARCH,
+        exact_match=EXACT_MATCH,
+        excluded_extensions=EXCLUDED_EXTENSIONS,
+        allowed_formats=ALLOWED_FORMATS,
+    )
     
     if EXACT_MATCH:
         logger.info("Exact matching mode enabled - only exact artist-album-track matches will be selected")
@@ -1510,237 +1168,6 @@ async def main():
         if results_log:
             logger.info("Generating final report...")
             generate_report(CSV_FILE, results_log, log_dir)
-
-def detect_search_intent(artist: str, album: str, track: str) -> Dict[str, bool]:
-    """
-    Detect if user is explicitly searching for live/remix/cover/etc versions.
-    
-    Args:
-        artist: Artist name
-        album: Album name (may be empty)
-        track: Track name (may be empty)
-        
-    Returns:
-        Dictionary with boolean flags for each version type
-    """
-    # Combine all search terms
-    search_terms = f"{artist} {album} {track}".lower()
-    
-    # Context-aware detection
-    # Check if album suggests live recordings (unplugged, live at, etc.)
-    album_suggests_live = album and any(term in album.lower() for term in 
-                                        ['live', 'unplugged', 'concert', 'mtv unplugged', 'in concert'])
-    
-    return {
-        'allow_remix': 'remix' in search_terms or 'remixed' in search_terms or 're-mix' in search_terms,
-        'allow_live': 'live' in search_terms or album_suggests_live,
-        'allow_cover': 'cover' in search_terms,
-        'allow_acoustic': 'acoustic' in search_terms,
-        'allow_instrumental': 'instrumental' in search_terms,
-        'allow_demo': 'demo' in search_terms,
-        'allow_karaoke': 'karaoke' in search_terms,
-    }
-
-def should_reject_version(filename: str, track: str, search_intent: Dict[str, bool]) -> Optional[str]:
-    """
-    Check if file contains unwanted version markers.
-    
-    Args:
-        filename: Full file path
-        track: Track name from search query
-        search_intent: Dictionary of allowed version types
-        
-    Returns:
-        Rejection reason string if file should be rejected, None if acceptable
-    """
-    if not ALBUM_PREFERRED_SEARCH:
-        # Quality filtering only active in album-preferred mode
-        return None
-        
-    # Get just the filename (not full path) for checking
-    basename = os.path.basename(filename).lower()
-    
-    # Get track words to avoid false positives (e.g., "Live Wire" contains "live")
-    track_words = set(track.lower().split()) if track else set()
-    
-    # Define suspicious patterns with word boundaries to avoid false positives
-    suspicious_patterns = {
-        'remix': (r'\b(remix|remixed|re-mix)\b', search_intent.get('allow_remix', False)),
-        'live': (r'\b(live|concert)\b', search_intent.get('allow_live', False)),
-        'cover': (r'\bcover\b', search_intent.get('allow_cover', False)),
-        'acoustic': (r'\bacoustic\b', search_intent.get('allow_acoustic', False)),
-        'instrumental': (r'\binstrumental\b', search_intent.get('allow_instrumental', False)),
-        'demo': (r'\bdemo\b', search_intent.get('allow_demo', False)),
-        'alternate': (r'\b(alternate|alternative|alt\s+version)\b', False),
-        'edit': (r'\b(radio\s+edit|extended|club\s+mix|dj\s+mix)\b', False),
-        'karaoke': (r'\bkaraoke\b', search_intent.get('allow_karaoke', False)),
-        'tribute': (r'\btribute\b', False),
-    }
-    
-    for pattern_name, (pattern, is_allowed) in suspicious_patterns.items():
-        match = re.search(pattern, basename)
-        if match:
-            matched_word = match.group(0)
-            
-            # Check if matched word is part of the track name itself
-            # (e.g., track is "Live Wire", shouldn't reject for containing "live")
-            if matched_word in track_words:
-                continue
-            
-            # If user didn't request this version type, reject it
-            if not is_allowed:
-                return f"unwanted version: {pattern_name}"
-    
-    return None
-
-def rank_all_results(responses: List[Dict[str, Any]], artist: str, album: Optional[str] = None, track: Optional[str] = None, search_intent: Optional[Dict[str, bool]] = None):
-    """
-    Rank all valid results from all users based on format priority, cleanliness, and size.
-    Also returns a list of rejection reasons if no valid candidates are found.
-    
-    Args:
-        responses: List of search responses from the API
-        artist: Artist name
-        album: Album name (optional)
-        track: Track name (optional)
-        search_intent: Dictionary of allowed version types (for quality filtering)
-    
-    Returns:
-        Tuple of (ranked_candidates, rejection_reasons)
-    """
-    if search_intent is None:
-        search_intent = {}
-    all_candidates = []
-    rejection_reasons = []
-    
-    for response in responses:
-        username = response.get('username')
-        for file_info in response.get('files', []):
-            filename = file_info.get('filename', '')
-            reason = None
-            # Skip excluded extensions
-            if file_has_excluded_extension(filename, EXCLUDED_EXTENSIONS):
-                reason = f"excluded extension: {os.path.splitext(filename)[1]}"
-                rejection_reasons.append(reason)
-                continue
-            # Get format priority (999 if not in allowed formats)
-            priority = get_priority_group(filename)
-            if priority >= len(ALLOWED_FORMATS):
-                reason = f"not allowed format: {os.path.splitext(filename)[1]}"
-                rejection_reasons.append(reason)
-                continue
-            
-            # Check for unwanted versions (remix, live, etc.) if in album-preferred mode
-            if ALBUM_PREFERRED_SEARCH:
-                rejection_reason = should_reject_version(filename, track or "", search_intent)
-                if rejection_reason:
-                    rejection_reasons.append(rejection_reason)
-                    continue
-            
-            # Check if this file matches what we're looking for
-            match_found = False
-            if track and album:
-                if EXACT_MATCH:
-                    match_found = is_exact_match(filename, artist, album, track)
-                elif ALBUM_PREFERRED_SEARCH:
-                    # Album-preferred mode: only require track in path
-                    # Album is checked later for preference, not filtering
-                    track_lower = track.lower()
-                    filename_lower = filename.lower()
-                    match_found = track_lower in filename_lower
-                else:
-                    # Standard mode: require both album and track
-                    # Special case: when album and track names are the same,
-                    # require the string to appear at least twice to ensure
-                    # we match "Artist - Album - Track" structure, not just
-                    # any file containing that string once
-                    track_lower = track.lower()
-                    album_lower = album.lower()
-                    filename_lower = filename.lower()
-                    
-                    if track_lower == album_lower:
-                        # Count occurrences of the matching string
-                        count = filename_lower.count(track_lower)
-                        # Require at least 2 occurrences (one for album, one for track)
-                        # Also ensure artist is present
-                        match_found = (count >= 2 and 
-                                     artist.lower() in filename_lower and
-                                     track_lower in filename_lower)
-                    else:
-                        # Normal case: album and track are different
-                        match_found = track_lower in filename_lower and album_lower in filename_lower
-            elif track and not album:
-                if EXACT_MATCH:
-                    match_found = is_exact_match(filename, artist, "", track)
-                else:
-                    match_found = track.lower() in filename.lower()
-            elif album and not track:
-                match_found = album.lower() in filename.lower()
-            else:
-                match_found = artist.lower() in filename.lower()
-            if not match_found:
-                reason = "no match for search criteria"
-                rejection_reasons.append(reason)
-                continue
-            # Score the filename cleanliness
-            cleanliness_score = score_filename_cleanliness(filename, artist, album or "", track or "")
-            
-            # Check if album appears in the full path (for album-preferred mode)
-            has_album_match = album and album.lower() in filename.lower() if album else False
-            
-            candidate = {
-                'username': username,
-                'filename': filename,
-                'size': file_info.get('size', 0),
-                'priority': priority,
-                'cleanliness': cleanliness_score,
-                'has_album_match': has_album_match,
-                'file_id': file_info.get('id') or file_info.get('file_id'),
-                'original_response': response,
-                'file_info': file_info
-            }
-            all_candidates.append(candidate)
-    
-    # Sort candidates
-    if ALBUM_PREFERRED_SEARCH:
-        # Album-preferred mode: prioritize album matches before format
-        # Sort by: album match (True first) → format → cleanliness → size
-        all_candidates.sort(key=lambda x: (
-            not x.get('has_album_match', False),  # False sorts before True, so invert
-            x['priority'],
-            -x['cleanliness'],
-            -x['size']
-        ))
-    else:
-        # Standard mode: format priority first
-        all_candidates.sort(key=lambda x: (
-            x['priority'],
-            -x['cleanliness'],
-            -x['size']
-        ))
-    # Log the ranking results
-    if all_candidates:
-        logger.info(f"Ranked {len(all_candidates)} valid candidates")
-        
-        # Show album match summary if in album-preferred mode
-        if ALBUM_PREFERRED_SEARCH:
-            album_matches = sum(1 for c in all_candidates if c.get('has_album_match', False))
-            logger.info(f"  {album_matches} with album match, {len(all_candidates) - album_matches} without")
-        
-        top_n = min(5, len(all_candidates))
-        logger.info(f"Top {top_n} candidates:")
-        for i, candidate in enumerate(all_candidates[:top_n], 1):
-            format_type = ALLOWED_FORMATS[candidate['priority']]
-            album_indicator = " [ALBUM MATCH]" if candidate.get('has_album_match', False) else ""
-            logger.info(f"  {i}. {os.path.basename(candidate['filename'])} "
-                       f"from {candidate['username']} - "
-                       f"Format: {format_type}, "
-                       f"Cleanliness: {candidate['cleanliness']:.1f}, "
-                       f"Size: {candidate['size']:,} bytes{album_indicator}")
-    else:
-        logger.info("No valid candidates found")
-    # Return both candidates and rejection reasons
-    return all_candidates, rejection_reasons
 
 async def check_queue_status(username: str) -> Tuple[bool, int]:
     """
