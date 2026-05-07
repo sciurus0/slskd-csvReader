@@ -143,20 +143,13 @@ import time
 import os
 import sys
 import logging
-import requests
-import json
-import inspect
 import argparse
 from collections import namedtuple
 from datetime import datetime
 import asyncio
-import concurrent.futures
-from asyncio import TimeoutError
 from typing import Dict, List, Tuple, Optional, Any, Union, Set, Callable, Awaitable
 import re
 import unicodedata
-
-import slskd_api
 
 from slskd_logging import DEFAULT_OUTPUT_DIR, logger, setup_logging
 from slskd_csv import (
@@ -174,6 +167,13 @@ from slskd_search import (
     search_slskd_async,
     detect_search_intent,
     rank_all_results,
+)
+from slskd_queue import (
+    configure_queue_context,
+    initialize_slskd_client,
+    enqueue_files_async,
+    check_queue_status,
+    find_best_available_candidate,
 )
 from slskd_config import (
     HOST,
@@ -196,9 +196,9 @@ from slskd_config import (
     ALLOWED_FORMATS,
     POLL_INTERVAL,
     MAX_POLLS,
-    SOURCE,
     make_headers,
 )
+
 
 # ======== Filename Sanitization ========
 
@@ -336,140 +336,6 @@ results_log = []  # To track detailed results for reporting
 queued_files_tracker = []  # Global list to track all queued files for status checking
 
 
-
-
-def initialize_slskd_client() -> slskd_api.SlskdClient:
-    """
-    Initialize and return a properly configured SLSKD API client.
-    
-    Returns:
-        A configured SlskdClient instance ready for API calls
-    """
-    return slskd_api.SlskdClient(host=HOST, api_key=API_KEY)
-
-
-async def enqueue_files_async(client: slskd_api.SlskdClient, 
-                              username: str, 
-                              search_results: List[Dict[str, Any]]) -> int:
-    """
-    Enqueue one or more files via slskd_api client.
-    
-    Args:
-        client: The SLSKD client
-        username: Username to download from
-        search_results: List of dicts containing file info with at least 'filename' and 'size'
-        
-    Returns:
-        Number of files successfully queued
-        
-    Raises:
-        TimeoutError: If the enqueue operation times out
-        Exception: For any other errors during enqueuing
-    """
-    try:
-        logger.info(f"Enqueueing files from {username}: {len(search_results)} file(s)")
-        
-        # The slskd_api.transfers.enqueue method expects search results with specific format
-        # Important: Extract the file IDs (previously successful approach)
-        file_ids = []
-        for file_info in search_results:
-            if 'id' in file_info:
-                file_ids.append(file_info['id'])
-            elif 'file_id' in file_info:
-                file_ids.append(file_info['file_id'])
-        
-        if not file_ids:
-            # If no IDs found, try the original approach with full file info
-            file_info_list = search_results
-            logger.info(f"Sending full file info: {len(file_info_list)} files")
-        else:
-            # Use file IDs only (previously working approach)
-            file_info_list = file_ids
-            logger.info(f"Sending file IDs: {file_ids}")
-        
-        # Use direct API calls if specified
-        if USE_DIRECT_API:
-            try:
-                post_url = f"{HOST.rstrip('/')}{API_PATH}/transfers/downloads/{username}"
-                logger.debug(f"Direct API call to: {post_url}")
-                logger.debug(f"Payload: {json.dumps(file_info_list)}")
-                
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    resp = await asyncio.wait_for(
-                        asyncio.get_event_loop().run_in_executor(
-                            pool, lambda: requests.post(post_url, json=file_info_list, headers=HEADERS)
-                        ),
-                        timeout=ENQUEUE_TIMEOUT
-                    )
-                resp.raise_for_status()
-                
-                logger.info(f"Successfully enqueued {len(file_info_list)} file(s) for {username} using direct API")
-                
-                # Track the files we've queued for status checking
-                for file_info in search_results:
-                    filename = file_info.get('filename')
-                    if filename:
-                        # Store more metadata about the download to help with matching later
-                        now = datetime.now().isoformat()
-                        tracked_file = {
-                            'username': username,
-                            'filename': filename,
-                            'basename': os.path.basename(filename),
-                            'queued_at': now,
-                            'download_status': 'queued',  # Initial status
-                            'last_checked': now,
-                            'size': file_info.get('size', 0)
-                        }
-                        
-                        # Add search terms that can help identify the file later
-                        if '_search_terms' in file_info:
-                            tracked_file['search_terms'] = file_info['_search_terms']
-                        
-                        queued_files_tracker.append(tracked_file)
-                
-                stats.enqueued_files += len(file_info_list)
-                return len(file_info_list)
-            except Exception as e:
-                if USE_DIRECT_API:  # If direct API was explicitly requested, don't fall back
-                    raise
-                logger.warning(f"Direct API enqueue failed, trying library method: {e}")
-        
-        # Only reach here if direct API failed and USE_DIRECT_API is False
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    pool, lambda: client.transfers.enqueue(username, file_info_list)
-                ),
-                timeout=ENQUEUE_TIMEOUT
-            )
-        
-        # Track the files we've queued for status checking (client library method)
-        for file_info in search_results:
-            filename = file_info.get('filename')
-            if filename:
-                # Store more metadata about the download to help with matching later
-                now = datetime.now().isoformat()
-                queued_files_tracker.append({
-                    'username': username,
-                    'filename': filename,
-                    'basename': os.path.basename(filename),
-                    'queued_at': now,
-                    'download_status': 'queued',  # Initial status
-                    'last_checked': now,
-                    'size': file_info.get('size', 0)
-                })
-        
-        logger.info(f"Successfully enqueued {len(file_info_list)} file(s) for {username} using client library")
-        stats.enqueued_files += len(file_info_list)
-        return len(file_info_list)
-    
-    except TimeoutError:
-        logger.error(f"Enqueue operation timed out for {username}")
-        return 0
-    except Exception as e:
-        logger.error(f"Client enqueue failed for {username}: {e}")
-        logger.error(f"Failed payload: {search_results}")
-        return 0
 
 
 async def process_row(client, row, row_index, total_rows):
@@ -836,227 +702,6 @@ async def process_batch(client, rows, start_index, total_rows):
                     f"{stats.successful}/{stats.total_processed} successful ({stats.failed} failed)")
 
 
-async def check_downloads_status():
-    """
-    Check status of all queued downloads and update their status in the tracker.
-    This runs as a background task and doesn't interfere with the main script.
-    """
-    global queued_files_tracker
-    
-    try:
-        # First check active downloads
-        url = f"{HOST.rstrip('/')}{API_PATH}/transfers/downloads"
-        logger.debug(f"Checking active downloads from: {url}")
-        
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            resp = await asyncio.get_event_loop().run_in_executor(
-                pool, lambda: requests.get(url, headers=HEADERS)
-            )
-        resp.raise_for_status()
-        active_downloads = resp.json()
-        
-        # Process the response structure based on what the API returns
-        if isinstance(active_downloads, dict):
-            if 'downloads' in active_downloads:
-                # Handle nested structure
-                logger.debug(f"Active downloads response has 'downloads' key with {len(active_downloads['downloads'])} items")
-                active_downloads = active_downloads['downloads']
-            else:
-                # Log all keys at the top level to help understand structure
-                logger.debug(f"Active downloads response keys: {list(active_downloads.keys())}")
-        
-        # Now check completed downloads with a separate API call
-        # This endpoint should return downloads that have finished
-        logger.debug(f"Checking completed downloads")
-        completed_downloads = []
-        try:
-            completed_url = f"{HOST.rstrip('/')}{API_PATH}/transfers/downloads/completed"
-            logger.debug(f"Requesting completed downloads from: {completed_url}")
-            
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                completed_resp = await asyncio.get_event_loop().run_in_executor(
-                    pool, lambda: requests.get(completed_url, headers=HEADERS)
-                )
-            
-            if completed_resp.status_code == 200:
-                completed_data = completed_resp.json()
-                if isinstance(completed_data, dict) and 'downloads' in completed_data:
-                    logger.debug(f"Completed downloads response has 'downloads' key with {len(completed_data['downloads'])} items")
-                    completed_downloads = completed_data['downloads']
-                elif isinstance(completed_data, list):
-                    logger.debug(f"Completed downloads response is a list with {len(completed_data)} items")
-                    completed_downloads = completed_data
-                else:
-                    # Log all keys at the top level to help understand structure
-                    logger.debug(f"Completed downloads response keys: {list(completed_data.keys()) if isinstance(completed_data, dict) else 'Not a dict'}")
-                
-                logger.info(f"Found {len(completed_downloads)} completed downloads")
-            else:
-                logger.warning(f"Failed to get completed downloads: {completed_resp.status_code}")
-                if completed_resp.text:
-                    logger.warning(f"Response text: {completed_resp.text[:500]}")  # First 500 chars to avoid massive logs
-        except Exception as e:
-            logger.warning(f"Error getting completed downloads: {e}")
-
-        # Debug the structure of both endpoints
-        if active_downloads and len(active_downloads) > 0:
-            logger.debug(f"Active download structure example: {json.dumps(active_downloads[0], indent=2)}")
-        
-        if completed_downloads and len(completed_downloads) > 0:
-            logger.debug(f"Completed download structure example: {json.dumps(completed_downloads[0], indent=2)}")
-        
-        # Check download directory as well for any completed files
-        logger.debug(f"Checking download directory for completed files")
-        download_dir_files = []
-        try:
-            folder_url = f"{HOST.rstrip('/')}{API_PATH}/filesystem/downloads"
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                folder_resp = await asyncio.get_event_loop().run_in_executor(
-                    pool, lambda: requests.get(folder_url, headers=HEADERS)
-                )
-            
-            if folder_resp.status_code == 200:
-                folder_data = folder_resp.json()
-                if isinstance(folder_data, dict):
-                    # Log the keys to help understand the structure
-                    logger.debug(f"Download folder response keys: {list(folder_data.keys())}")
-                    
-                    if 'files' in folder_data:
-                        download_dir_files = folder_data['files']
-                        logger.info(f"Found {len(download_dir_files)} files in download directory")
-                    elif 'content' in folder_data:
-                        # Some API versions might use different keys
-                        logger.debug(f"Download folder uses 'content' key instead of 'files'")
-                        download_dir_files = folder_data.get('content', [])
-                        logger.info(f"Found {len(download_dir_files)} files in download directory")
-            else:
-                logger.warning(f"Failed to get download directory: {folder_resp.status_code}")
-                if folder_resp.text:
-                    logger.warning(f"Response text: {folder_resp.text[:500]}")  # First 500 chars to avoid massive logs
-        except Exception as e:
-            logger.warning(f"Error checking download folder: {e}")
-        
-        # Debug logging to understand what's happening
-        logger.debug(f"Found {len(active_downloads)} active and {len(completed_downloads)} completed downloads")
-        
-        # Map SLSKD states to our status values
-        # SLSKD uses state values like "Requested", "InProgress", "Completed", "Cancelled"
-        status_map = {
-            "requested": "queued",
-            "inprogress": "downloading",
-            "completed": "completed", 
-            "cancelled": "cancelled",
-            # Add other mappings as needed
-        }
-        
-        # Update status for all tracked files
-        status_updated = False
-        for queued_file in queued_files_tracker:
-            username = queued_file.get('username')
-            filename = queued_file.get('filename')
-            basename = queued_file.get('basename') or os.path.basename(filename)
-            old_status = queued_file.get('download_status', 'unknown')
-            
-            if not filename:
-                continue
-                
-            # Find matching download in active downloads
-            current_status = "not_found"
-            for download in active_downloads:
-                dl_filename = download.get('filename', '')
-                dl_basename = os.path.basename(dl_filename) if dl_filename else ''
-                dl_username = download.get('username', '')
-                dl_state = download.get('state', '').lower()
-                
-                # Try different matching approaches
-                if (dl_username == username or not username) and any([
-                    # Exact matches
-                    dl_filename == filename,
-                    dl_basename == basename,
-                    # Partial matches 
-                    basename in dl_basename,
-                    dl_basename in basename,
-                ]):
-                    current_status = status_map.get(dl_state, dl_state)
-                    # Add additional details that might be useful
-                    queued_file['size'] = download.get('size')
-                    queued_file['bytesTransferred'] = download.get('bytesTransferred')
-                    queued_file['progress'] = (
-                        f"{(download.get('bytesTransferred', 0) / max(1, download.get('size', 1)) * 100):.1f}%"
-                        if download.get('size') else "unknown"
-                    )
-                    break
-            
-            # If not found in active downloads, check completed downloads
-            if current_status == "not_found":
-                for download in completed_downloads:
-                    dl_filename = download.get('filename', '')
-                    dl_basename = os.path.basename(dl_filename) if dl_filename else ''
-                    dl_username = download.get('username', '')
-                    
-                    if (dl_username == username or not username) and any([
-                        # Exact matches
-                        dl_filename == filename,
-                        dl_basename == basename,
-                        # Partial matches 
-                        basename in dl_basename,
-                        dl_basename in basename,
-                    ]):
-                        current_status = "completed"  # Force completed status
-                        queued_file['size'] = download.get('size')
-                        queued_file['bytesTransferred'] = download.get('size')  # Assume full transfer for completed
-                        queued_file['progress'] = "100%"
-                        break
-            
-            # If still not found but we have the file in download directory, mark as completed
-            if current_status == "not_found" and download_dir_files:
-                for file_info in download_dir_files:
-                    dl_filename = file_info.get('name', '')
-                    if basename == dl_filename or basename in dl_filename:
-                        current_status = "completed"
-                        queued_file['size'] = file_info.get('size')
-                        queued_file['bytesTransferred'] = file_info.get('size')
-                        queued_file['progress'] = "100%"
-                        break
-            
-            # Only log if status has changed
-            if current_status != old_status:
-                status_updated = True
-                logger.info(f"Download status for {basename}: {old_status} → {current_status}")
-                
-            queued_file['download_status'] = current_status
-            queued_file['last_checked'] = datetime.now().isoformat()
-        
-        # Print summary of download statuses if any changed
-        if status_updated:
-            status_counts = {}
-            for file in queued_files_tracker:
-                status = file.get('download_status', 'unknown')
-                status_counts[status] = status_counts.get(status, 0) + 1
-                
-            logger.info(f"Download status summary: {status_counts}")
-        else:
-            logger.debug("No status changes detected")
-            
-    except Exception as e:
-        logger.error(f"Error checking downloads status: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-
-async def start_status_monitoring(check_interval=300):  # 5 minutes by default
-    """Start a background task that periodically checks download status."""
-    logger.info(f"Starting download status monitoring (checking every {check_interval} seconds)")
-    
-    while True:
-        # Wait first to allow initial downloads to be queued
-        await asyncio.sleep(check_interval)
-        
-        # Check status if we have any queued files
-        if queued_files_tracker:
-            await check_downloads_status()
-        else:
-            logger.debug("No queued files to check status for")
-
 async def main():
     """Main function with argument parsing."""
     # Declare globals at the beginning of the function
@@ -1122,6 +767,18 @@ async def main():
         allowed_formats=ALLOWED_FORMATS,
     )
     
+    configure_queue_context(
+        host=HOST,
+        api_path=API_PATH,
+        api_key=API_KEY,
+        headers=HEADERS,
+        enqueue_timeout=ENQUEUE_TIMEOUT,
+        use_direct_api=USE_DIRECT_API,
+        queue_limit=QUEUE_LIMIT,
+        queued_files_tracker=queued_files_tracker,
+        stats=stats,
+    )
+
     if EXACT_MATCH:
         logger.info("Exact matching mode enabled - only exact artist-album-track matches will be selected")
     
@@ -1168,80 +825,6 @@ async def main():
         if results_log:
             logger.info("Generating final report...")
             generate_report(CSV_FILE, results_log, log_dir)
-
-async def check_queue_status(username: str) -> Tuple[bool, int]:
-    """
-    Check a user's queue status.
-    
-    Args:
-        username: Username to check
-        
-    Returns:
-        Tuple of (has_open_slot: bool, queue_count: int)
-    """
-    try:
-        # Get user's current downloads
-        url = f"{HOST.rstrip('/')}{API_PATH}/transfers/downloads"
-        
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            resp = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    pool, lambda: requests.get(url, headers=HEADERS)
-                ),
-                timeout=ENQUEUE_TIMEOUT
-            )
-        resp.raise_for_status()
-        
-        downloads = resp.json()
-        
-        # Count current downloads for this user
-        user_queue_count = 0
-        for download in downloads:
-            if isinstance(download, dict) and download.get('username') == username:
-                user_queue_count += 1
-        
-        # Consider queue "open" if limit is 0 (no limit) or count is below limit
-        has_open_slot = QUEUE_LIMIT == 0 or user_queue_count < QUEUE_LIMIT
-        
-        return has_open_slot, user_queue_count
-        
-    except Exception as e:
-        logger.warning(f"Failed to check queue status for {username}: {e}")
-        # If we can't check, assume it's not available
-        return False, 999
-
-async def find_best_available_candidate(ranked_candidates: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """
-    Find the first candidate from the ranked list that has an open queue slot.
-    
-    Args:
-        ranked_candidates: List of candidates, already sorted by priority
-        
-    Returns:
-        Best available candidate or None if none are available
-    """
-    checked_users = set()  # Track users we've already checked to avoid duplicate checks
-    
-    for candidate in ranked_candidates:
-        username = candidate['username']
-        
-        # Skip if we've already checked this user
-        if username in checked_users:
-            continue
-            
-        checked_users.add(username)
-        
-        # Check queue status
-        has_open_slot, queue_count = await check_queue_status(username)
-        
-        if has_open_slot:
-            logger.info(f"Found available candidate: {os.path.basename(candidate['filename'])} "
-                       f"from {username} (queue count: {queue_count})")
-            return candidate
-        else:
-            logger.debug(f"Skipping {username} - queue count: {queue_count}")
-    
-    return None
 
 if __name__ == '__main__':
     # Run the async main function
