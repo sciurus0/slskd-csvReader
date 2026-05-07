@@ -1,4 +1,5 @@
-/.DS_Store
+# macOS
+.DS_Store
 /checkpoint.pkl
 /logs
 /to_queue.csv
