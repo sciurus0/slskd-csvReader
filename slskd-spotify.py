@@ -12,7 +12,7 @@ Supports single-track or full-album queueing with advanced features:
 - Timeout handling
 - Format prioritization (.mp3 → .m4a → .flac)
 - Retry-failed mode for failed downloads
-- Download status monitoring
+- Queued download tracking (records enqueued files; no background status polling)
 - Queue management with configurable limits
 - Filename sanitization for special characters
 
