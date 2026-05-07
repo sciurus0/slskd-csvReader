@@ -3,3 +3,8 @@
 /logs
 /to_queue.csv
 /api.txt
+
+# Python bytecode (keep repo to source only)
+__pycache__/
+*.py[cod]
+*$py.class
