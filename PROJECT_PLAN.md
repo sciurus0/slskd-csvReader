@@ -13,3 +13,10 @@ High-level goals for expanding the existing `slskd-spotify.py` workflow into a m
 - [ ] Prepare/move that file to a location where it is ready to be re-run.
 - [ ] Create a scheduler variable/configuration that will run this entire script on a defined cadence.
 
+### Feature backlog (not part of structural refactor)
+
+Track polish items here so they are not lost among refactor work.
+
+- [ ] **Search query string construction (featured artists / multi-artist rows)**  
+  Retrying with featured artists or alternate artist strings is fine, but the **literal string passed to Soulseek search** needs refinement. Example observed: primary attempt `86LOVE - BAD SIDE - BAD SIDE` yielded no results; a follow-up used something like `86LOVE;The Kids;Tinywiings - BAD SIDE - BAD SIDE`, also with no results—the semicolon-joined or composite artist field should be normalized into queries users (and peers) actually share on the network, rather than passing through raw CSV joining. Decide rules for: stripping featured credits, primary-artist-only fallback, album/track delimiter consistency, and max query length.
+
