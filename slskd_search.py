@@ -406,12 +406,34 @@ def rank_all_results(
     album: Optional[str] = None,
     track: Optional[str] = None,
     search_intent: Optional[Dict[str, bool]] = None,
+    target_duration_ms: Optional[int] = None,
 ):
     """Rank valid results and return (ranked_candidates, rejection_reasons)."""
     if search_intent is None:
         search_intent = {}
     all_candidates = []
     rejection_reasons = []
+
+    def _extract_duration_ms(file_info: Dict[str, Any]) -> Optional[int]:
+        # slskd payloads are not fully stable across versions; try common keys.
+        for key in ("duration_ms", "durationMs"):
+            val = file_info.get(key)
+            if val is not None:
+                try:
+                    return int(float(val))
+                except (TypeError, ValueError):
+                    pass
+        # Some payloads may expose seconds-style durations.
+        for key in ("duration", "length"):
+            val = file_info.get(key)
+            if val is not None:
+                try:
+                    num = float(val)
+                    # Heuristic: small values likely seconds, large values likely ms.
+                    return int(num * 1000) if num < 10000 else int(num)
+                except (TypeError, ValueError):
+                    pass
+        return None
 
     for response in responses:
         username = response.get("username")
@@ -482,6 +504,12 @@ def rank_all_results(
                 "original_response": response,
                 "file_info": file_info,
             }
+            duration_ms = _extract_duration_ms(file_info)
+            candidate["duration_ms"] = duration_ms
+            if target_duration_ms is not None and duration_ms is not None:
+                candidate["duration_delta_ms"] = abs(duration_ms - target_duration_ms)
+            else:
+                candidate["duration_delta_ms"] = None
             all_candidates.append(candidate)
 
     if _album_preferred_search:
@@ -491,10 +519,18 @@ def rank_all_results(
                 x["priority"],
                 -x["cleanliness"],
                 -x["size"],
+                x["duration_delta_ms"] if x["duration_delta_ms"] is not None else 10**12,
             )
         )
     else:
-        all_candidates.sort(key=lambda x: (x["priority"], -x["cleanliness"], -x["size"]))
+        all_candidates.sort(
+            key=lambda x: (
+                x["priority"],
+                -x["cleanliness"],
+                -x["size"],
+                x["duration_delta_ms"] if x["duration_delta_ms"] is not None else 10**12,
+            )
+        )
 
     if all_candidates:
         logger.info(f"Ranked {len(all_candidates)} valid candidates")
@@ -508,12 +544,15 @@ def rank_all_results(
         for i, candidate in enumerate(all_candidates[:top_n], 1):
             format_type = _allowed_formats[candidate["priority"]]
             album_indicator = " [ALBUM MATCH]" if candidate.get("has_album_match", False) else ""
+            duration_indicator = ""
+            if target_duration_ms is not None and candidate.get("duration_delta_ms") is not None:
+                duration_indicator = f", Duration Δ: {candidate['duration_delta_ms']}ms"
             logger.info(
                 f"  {i}. {os.path.basename(candidate['filename'])} "
                 f"from {candidate['username']} - "
                 f"Format: {format_type}, "
                 f"Cleanliness: {candidate['cleanliness']:.1f}, "
-                f"Size: {candidate['size']:,} bytes{album_indicator}"
+                f"Size: {candidate['size']:,} bytes{duration_indicator}{album_indicator}"
             )
     else:
         logger.info("No valid candidates found")

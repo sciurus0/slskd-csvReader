@@ -18,5 +18,12 @@ High-level goals for expanding the existing `slskd-spotify.py` workflow into a m
 Track polish items here so they are not lost among refactor work.
 
 - [ ] **Search query string construction (featured artists / multi-artist rows)**  
-  Retrying with featured artists or alternate artist strings is fine, but the **literal string passed to Soulseek search** needs refinement. Example observed: primary attempt `86LOVE - BAD SIDE - BAD SIDE` yielded no results; a follow-up used something like `86LOVE;The Kids;Tinywiings - BAD SIDE - BAD SIDE`, also with no results—the semicolon-joined or composite artist field should be normalized into queries users (and peers) actually share on the network, rather than passing through raw CSV joining. Decide rules for: stripping featured credits, primary-artist-only fallback, album/track delimiter consistency, and max query length.
+  Retrying with featured artists or alternate artist strings is fine, but the **literal string passed to Soulseek search** needs refinement. Example observed: primary attempt `86LOVE - BAD SIDE - BAD SIDE` yielded no results; a follow-up used something like `86LOVE;The Kids;Tinywiings - BAD SIDE - BAD SIDE`, also with no results—the semicolon-joined or composite artist field should be normalized into queries users (and peers) actually share on the network, rather than passing through raw CSV joining.
+  
+  **Decision updates for implementation:**
+  - Use loose token queries by default (no hard `artist - album - track` separator requirement).
+  - Do **not** globally strip punctuation from source metadata; punctuation in names can be meaningful (for example `Wu-Tang`, `C.R.E.A.M.`).
+  - Generate query variants in order: literal (punctuation preserved) first, punctuation-softened fallback second.
+  - Keep candidate count bounded (small fixed fallback sequence, no combinatorial expansion).
+  - Use Spotify `duration_ms` only as a **weak closest-match tie-breaker** among already-ranked candidates (never an exact-match gate).
 
