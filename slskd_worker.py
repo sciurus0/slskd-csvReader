@@ -28,6 +28,7 @@ from slskd_queue import (
     find_best_available_candidate,
     initialize_slskd_client,
 )
+from slskd_query import build_query_candidates
 from slskd_search import detect_search_intent, rank_all_results, search_slskd_async
 
 # Runtime mirrors CLI-overridden settings in the entry script (see configure_worker_context).
@@ -166,6 +167,9 @@ async def process_row(client, row, row_index, total_rows):
             "timestamp": datetime.now().isoformat(),
             "attempts": 0,
             "fallback_used": False,
+            "search_query_used": "",
+            "search_strategy": "",
+            "search_variant": "",
         }
     )
 
@@ -195,44 +199,62 @@ async def process_row(client, row, row_index, total_rows):
         logger.warning(f"Skipping row with missing artist: {row}")
         return False
 
-    if album and track:
-        if _album_preferred_search:
-            pattern = f"{artist} - {track}"
-            search_type = "artist-track-with-album-preference"
-        else:
-            pattern = f"{artist} - {album} - {track}"
-            search_type = "artist-album-track"
-    elif album and not track:
-        pattern = f"{artist} - {album}"
-        search_type = "artist-album"
-    elif track and not album:
-        pattern = f"{artist} - {track}"
-        search_type = "artist-track"
-    else:
+    if not album and not track:
         result_entry["message"] = "Missing both album and track (at least one required)"
         _results_log.append(result_entry)
         logger.warning(f"Skipping row with only artist: {row}")
         return False
 
-    logger.info(f"🔍 Searching for: {pattern} ({search_type}) ({row_index}/{total_rows})")
+    target_duration_ms: Optional[int] = None
+    raw_duration = row.get("duration_ms")
+    if raw_duration not in (None, ""):
+        try:
+            target_duration_ms = int(float(raw_duration))
+        except (TypeError, ValueError):
+            target_duration_ms = None
+
+    query_candidates = build_query_candidates(artist=artist, album=album, track=track, max_candidates=3)
+    if not query_candidates:
+        result_entry["message"] = "No valid search query could be generated"
+        _results_log.append(result_entry)
+        return False
 
     try:
-        resp_list = await search_slskd_async(pattern)
-
-        if not resp_list:
-            result_entry["status"] = "failed"
-            result_entry["message"] = "No results found"
-            _results_log.append(result_entry)
-            logger.info(f"No results for: {pattern}")
-            return False
-
         files_queued = 0
-
         search_intent = detect_search_intent(artist, album or "", track or "")
+        ranked_candidates = []
+        rejection_reasons: List[str] = []
 
-        ranked_candidates, rejection_reasons = rank_all_results(
-            resp_list, artist, album if album else None, track if track else None, search_intent
-        )
+        for attempt_idx, candidate in enumerate(query_candidates, start=1):
+            query = str(candidate["query"])
+            strategy = str(candidate["strategy"])
+            variant = str(candidate["variant"])
+            result_entry["attempts"] = attempt_idx
+
+            logger.info(
+                f"🔍 Searching for: {query} ({strategy}/{variant}) ({row_index}/{total_rows})"
+            )
+            resp_list = await search_slskd_async(query)
+            if not resp_list:
+                logger.info(f"No results for query attempt {attempt_idx}: {query}")
+                continue
+
+            ranked_candidates, rejection_reasons = rank_all_results(
+                resp_list,
+                artist,
+                album if album else None,
+                track if track else None,
+                search_intent,
+                target_duration_ms=target_duration_ms,
+            )
+            if ranked_candidates:
+                result_entry["search_query_used"] = query
+                result_entry["search_strategy"] = strategy
+                result_entry["search_variant"] = variant
+                result_entry["fallback_used"] = attempt_idx > 1
+                break
+            logger.info(f"No valid candidates for query attempt {attempt_idx}: {query}")
+
         if not ranked_candidates:
             result_entry["status"] = "failed"
             if rejection_reasons:
@@ -244,9 +266,9 @@ async def process_row(client, row, row_index, total_rows):
                 )
                 result_entry["message"] = f"No valid candidates found: {reason_summary}"
             else:
-                result_entry["message"] = "No valid candidates found"
+                result_entry["message"] = "No valid candidates found from generated queries"
             _results_log.append(result_entry)
-            logger.info(f"No valid candidates found for: {pattern}")
+            logger.info("No valid candidates found across all query attempts")
             return False
 
         if not track:
@@ -271,7 +293,7 @@ async def process_row(client, row, row_index, total_rows):
                 result_entry["status"] = "failed"
                 result_entry["message"] = "No candidates with open queue slots found"
                 _results_log.append(result_entry)
-                logger.info(f"No candidates with open queue slots for: {pattern}")
+                logger.info("No candidates with open queue slots for generated queries")
                 return False
 
             files_queued = await enqueue_files_async(
@@ -304,7 +326,7 @@ async def process_row(client, row, row_index, total_rows):
         result_entry["status"] = "error"
         result_entry["message"] = f"Error: {str(e)}"
         _results_log.append(result_entry)
-        logger.error(f"Error processing '{pattern}': {e}")
+        logger.error(f"Error processing generated queries: {e}")
         return False
 
 
