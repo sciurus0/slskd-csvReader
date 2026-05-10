@@ -13,6 +13,62 @@ High-level goals for expanding the existing `slskd-spotify.py` workflow into a m
 - Prepare/move that file to a location where it is ready to be re-run.
 - Create a scheduler variable/configuration that will run this entire script on a defined cadence.
 
+---
+
+### Interactive end-to-end runner (scope only — not implemented)
+
+Documentation for a future **single entrypoint** so the operator runs **one command** in a terminal and drives Spotify playlist selection → export → merge → SLSKD without manually chaining scripts. **No code implied here** until explicitly authorized.
+
+#### User story
+
+1. Run **one command** from a terminal.
+2. **Log in to Spotify** (OAuth as today); **list playlists** for **interactive** browsing (numbered rows consistent with current `--list-playlists` ordering).
+3. Operator enters a **comma-separated list of playlist numbers** (1-based indices matching that listing).
+4. After submit: **selected playlists are exported** to CSV **combined with** the existing **`to_queue.csv`** pipeline (backup + sanitize rules per approved backlog), then **processing is handed off to SLSKD** via the existing **`slskd-spotify.py`** queue workflow.
+
+#### What already exists vs gaps
+
+| Piece | Status |
+| --- | --- |
+| Spotify OAuth + token cache | **`spotify_playlist_fetch.py`** |
+| Numbered playlist listing | **`--list-playlists`** / **`--list N`** |
+| Single-playlist export | URL / ID / **`--pick`** |
+| Merge backup + export → **`to_queue.csv`** | **`merge_queue.py`** (expects one dated **`YYYYMMDD-spotify-export.csv`** per current contract) |
+| UTF-8 BOM queue + sanitize-at-merge | Implemented per queue-merge backlog decisions |
+| Soulseek / slskd batch processing | **`slskd-spotify.py`** reading **`to_queue.csv`** |
+
+**Gaps (net-new orchestration):**
+
+- **Single driver** (shell wrapper or Python entry module) that sequences steps and preserves **one** UX session (login → list → prompt → export → merge → invoke downloader).
+- **Multi-playlist export**: implement by **concatenating** all chosen playlists into **one** dated **`YYYYMMDD-spotify-export.csv`** per run (locked below)—no multi-file merge input for v1.
+- **Interactive input** for comma-separated indices (validation, empty input, out-of-range handling, duplicate indices).
+- **Failure isolation**: if export fails for playlist *k*, whether to abort entire run or continue with partial exports (product decision).
+
+#### Decisions (locked — interactive runner)
+
+1. **One combined CSV per run:** For **any** run that exports **one or more** playlists, **concatenate** all exported rows into **a single** **`YYYYMMDD-spotify-export.csv`** for that run’s **local calendar date**, matching the **`merge_queue.py`** contract. **Out of scope for v1:** feeding **`merge_queue.py`** multiple Spotify export files or extending merge to accept a list of paths.
+
+#### Open decisions (settle before coding)
+
+1. **Entrypoint:** POSIX **`run_pipeline.sh`** invoking **`python3`** steps **vs** single **`python -m slskd_pipeline`** module — affects testing and Windows parity.
+2. **slskd invocation:** **`subprocess`** call to **`slskd-spotify.py`** with inherited env **vs** importing an async entry (today’s worker is asyncio). Subprocess keeps boundary clean; import reduces duplicate process setup.
+3. **Downloader scope per run:** Full **`to_queue.csv`** processing **vs** optional **`--limit`** / checkpoint-aware partial run — affects runtime and rate limits.
+4. **Non-interactive fallback:** Environment variable or flag for CI/automation without stdin (defer or explicit “not supported in v1”).
+5. **Working directory:** Repo root **vs** configurable **`--workspace`** so exports and **`to_queue.csv`** resolve predictably.
+
+#### Suggested phasing (when implementation is authorized)
+
+| Phase | Deliverable |
+| --- | --- |
+| **E1** | Documented manual sequence (three commands) + troubleshooting — zero code, validates ops assumptions. |
+| **E2** | Thin orchestration script: assume **`YYYYMMDD-spotify-export.csv`** already exists (one combined file); **merge_queue** → **slskd-spotify** only (proves subprocess wiring). |
+| **E3** | Add interactive listing + comma-separated picker + loop export into **one** combined CSV for the run date; then **merge_queue** → **slskd-spotify**. |
+| **E4** | Polish: `--dry-run`, confirmation prompt before SLSKD, resume story, logging prefix for each stage. |
+
+This runner work **does not replace** Phase B normalization pause or semantic query backlog items; it sits **above** ingestion + merge + download.
+
+---
+
 ### Spotify feature scope (planning backlog)
 
 This section tracks **what “Spotify feature complete” means** and **recommended phases**, adjusted per project direction. **No code changes implied here**—documentation only until implementation is explicitly authorized.
