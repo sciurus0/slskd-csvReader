@@ -44,10 +44,11 @@ Scopes: playlist-read-private, playlist-read-collaborative
 Usage:
     python3 spotify_playlist_fetch.py "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
     python3 spotify_playlist_fetch.py 37i9dQZF1DXcBWIGoYBM5M -o my_playlist.csv
+    python3 spotify_playlist_fetch.py --list 1
     python3 spotify_playlist_fetch.py --list-playlists --list-limit 1
     python3 spotify_playlist_fetch.py --pick 3 -o playlist_import.csv
     python3 spotify_playlist_fetch.py --login-only
-    SPOTIFY_DEBUG=1 python3 spotify_playlist_fetch.py --list-playlists --list-one
+    SPOTIFY_DEBUG=1 python3 spotify_playlist_fetch.py --list 1
 
 Exports one CSV row per playlist item (including removed tracks, local files, episodes).
 No market/availability filter. Playlist listing shows track counts only when the API includes them (? otherwise).
@@ -90,6 +91,8 @@ from slskd_config import load_api_txt
 ACCOUNTS_AUTHORIZE_URL = "https://accounts.spotify.com/authorize"
 ACCOUNTS_TOKEN_URL = "https://accounts.spotify.com/api/token"
 API_BASE = "https://api.spotify.com/v1"
+# GET /playlists/{id}/items — max limit 50; use "item" on each row (legacy "track" is deprecated).
+PLAYLIST_ITEMS_PAGE_LIMIT = 50
 
 DEFAULT_REDIRECT_URI = "http://127.0.0.1:8765/callback"
 DEFAULT_TOKEN_CACHE = Path.home() / ".config" / "slskd" / "spotify_tokens.json"
@@ -121,7 +124,7 @@ def _check_deadline(start_ts: float, context: str) -> None:
     if elapsed > MAX_API_RUNTIME_SECONDS:
         _die(
             f"{context} aborted after {elapsed:.1f}s (stall guard). "
-            "Try again later or reduce scope with --list-one/--list-limit."
+            "Try again later or reduce scope with --list N, --list-one, or --list-limit."
         )
 
 
@@ -185,7 +188,15 @@ def _spotify_get_json(
             continue
 
         if r.status_code != 200:
-            _die(f"{context} request failed ({r.status_code}): {r.text[:800]}")
+            extra = ""
+            if r.status_code == 403 and (
+                context.startswith("Playlist export") or context.startswith("Track-count lookup")
+            ):
+                extra = (
+                    "\nNote: Spotify allows playlist items only for playlists you own or collaborate on; "
+                    "playlists you only follow may appear in /me/playlists but return 403 here."
+                )
+            _die(f"{context} request failed ({r.status_code}): {r.text[:800]}{extra}")
 
         try:
             payload = r.json()
@@ -495,8 +506,11 @@ def playlist_item_to_row(item: Dict[str, Any]) -> Tuple[str, str, str]:
     Map one playlist item to (artist, album, track). Always returns a row — no filtering
     on playability, region, or local vs streaming. Missing/unavailable tracks export as
     empty strings.
+
+    Accepts PlaylistTrackObject from GET /playlists/{id}/items: primary field is ``item``;
+    legacy ``track`` is still recognized.
     """
-    tr = item.get("track")
+    tr = item.get("item") or item.get("track")
     if tr is None:
         return ("", "", "")
 
@@ -520,8 +534,11 @@ def playlist_item_to_row(item: Dict[str, Any]) -> Tuple[str, str, str]:
 def fetch_playlist_track_rows(token: str, playlist_id: str) -> List[Tuple[str, str, str]]:
     """Fetch every playlist item row (paginated). One CSV row per API item, no market filter."""
     rows: List[Tuple[str, str, str]] = []
-    url = f"{API_BASE}/playlists/{playlist_id}/tracks"
-    params: Dict[str, Any] = {"limit": 100}
+    url = f"{API_BASE}/playlists/{playlist_id}/items"
+    params: Dict[str, Any] = {
+        "limit": PLAYLIST_ITEMS_PAGE_LIMIT,
+        "additional_types": "episode",
+    }
     start_ts = time.time()
 
     session = requests.Session()
@@ -554,12 +571,12 @@ def fetch_playlist_track_rows(token: str, playlist_id: str) -> List[Tuple[str, s
 
 
 def _fetch_playlist_total_quick(session: requests.Session, playlist_id: str) -> int:
-    """Best-effort total count from playlist tracks paging endpoint."""
+    """Best-effort total count from GET /playlists/{id}/items."""
     pid = (playlist_id or "").strip()
     if not pid:
         return -1
-    url = f"{API_BASE}/playlists/{pid}/tracks"
-    params: Dict[str, Any] = {"limit": 1}
+    url = f"{API_BASE}/playlists/{pid}/items"
+    params: Dict[str, Any] = {"limit": 1, "additional_types": "episode"}
 
     try:
         payload = _spotify_get_json(
@@ -705,6 +722,13 @@ def main() -> None:
         help="List your playlists (numbered, stdout) and exit",
     )
     parser.add_argument(
+        "--list",
+        type=int,
+        metavar="N",
+        default=None,
+        help="List your playlists; fetch at most N (implies --list-playlists; same as --list-limit N)",
+    )
+    parser.add_argument(
         "--list-limit",
         type=int,
         metavar="N",
@@ -714,7 +738,7 @@ def main() -> None:
     parser.add_argument(
         "--list-one",
         action="store_true",
-        help="With --list-playlists: same as --list-limit 1 (single row, minimal listing traffic)",
+        help="With --list-playlists: same as --list 1 / --list-limit 1 (single row, minimal listing traffic)",
     )
     parser.add_argument(
         "--pick",
@@ -754,6 +778,16 @@ def main() -> None:
         _die("Specify either a playlist URL/ID or --pick N, not both.")
     if args.list_playlists and args.pick is not None:
         _die("Do not combine --list-playlists with --pick.")
+
+    if args.list is not None:
+        if args.list < 1:
+            _die("--list N requires N >= 1")
+        if args.list_limit is not None:
+            _die("Use either --list N or --list-limit N, not both.")
+        if args.list_one:
+            _die("Use either --list N or --list-one, not both.")
+        args.list_playlists = True
+        args.list_limit = args.list
 
     if args.list_one:
         if args.list_limit is not None:

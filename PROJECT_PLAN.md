@@ -115,6 +115,27 @@ Track polish items here so they are not lost among refactor work.
 - **Search query string construction (featured artists / multi-artist rows)**  
 Retrying with featured artists or alternate artist strings is fine, but the **literal string passed to Soulseek search** needs refinement. Example observed: primary attempt `86LOVE - BAD SIDE - BAD SIDE` yielded no results; a follow-up used something like `86LOVE;The Kids;Tinywiings - BAD SIDE - BAD SIDE`, also with no results—the semicolon-joined or composite artist field should be normalized into queries users (and peers) actually share on the network, rather than passing through raw CSV joining. Decide rules for: stripping featured credits, primary-artist-only fallback, album/track delimiter consistency, and max query length.
 
+---
+
+### Approved implementation backlog (deferred — dedicated feature branches)
+
+Items below are **approved** to schedule on appropriate branches when implementation time is authorized. Each should update docs/help/examples when landed.
+
+| Topic | Intent |
+| --- | --- |
+| **UTF-8 as preferred encoding** | **Reads:** fail fast on non–UTF-8; **no** encoding conversion. **Writes:** **UTF-8 with BOM** (`utf-8-sig`). Consolidate duplicated encoding try-lists (`slskd_worker` / `slskd_csv`) and align streaming vs non-streaming paths so behavior matches the above. |
+| **Queue merge + sanitize once** | **Canonical queue file:** `to_queue.csv` (same default as `slskd-spotify.py` / `slskd_config`). **When building the merged queue:** (1) Copy existing `to_queue.csv` to **`YYYYMMDD-to_queue.csv`** where `YYYYMMDD` is the **local** calendar date of execution **for this run** (same-day overwrite of that backup file is acceptable). (2) **Combine** **`YYYYMMDD-spotify-export.csv`** with **`YYYYMMDD-to_queue.csv`** (the backup just written) and **overwrite** **`to_queue.csv`** with the result. **All** data/file sanitization happens **only** in this merge step—**not** in `slskd_worker`, search, or elsewhere; when implemented, remove per-row sanitization outside this path so `to_queue.csv` is the single sanitized artifact. Phase B / J3 remains the place for **semantic** normalization (e.g. Soulseek query rules) if distinct from this sanitization. |
+| **Podcasts / episodes out of scope** | **Omit at the API** (do not request podcast/episode item types on playlist-items calls). Remove exporter code paths that exist only for episodes; **no** episode rows in CSV output. Align Phase A “completeness” with **music tracks only** (still include removed/local/incomplete **track** rows as returned). |
+| **Default Spotify export filename** | Default output from `spotify_playlist_fetch.py`: **`YYYYMMDD-spotify-export.csv`** with **`YYYYMMDD` = local calendar date** of the run. Preserve **`--output` / `-o`**. **Same-day overwrite** of the default export filename is acceptable. Update CLI help and examples that still reference `playlist_import.csv`. |
+
+#### Decisions (locked — approved backlog answers)
+
+1. **UTF-8:** Fail fast; no conversion; writes use **UTF-8 with BOM**.
+2. **Merge:** Backup `to_queue.csv` → `YYYYMMDD-to_queue.csv`; combine **`YYYYMMDD-spotify-export.csv`** + **`YYYYMMDD-to_queue.csv`** → overwrite **`to_queue.csv`**; sanitization **only** here, **nowhere else** in the project.
+3. **Episodes:** **Omit at API** only.
+4. **Datestamps:** **Local** `YYYYMMDD` for dated filenames (`*-spotify-export.csv`, `*-to_queue.csv`).
+5. **Collisions:** Same-day overwrite is **acceptable** (no extra disambiguation beyond optional `-o`).
+
 ### Post-OAuth / Spotify tooling follow-ups
 
 Items to revisit as the Spotify feature matures (overlap with **Phase C** above).
