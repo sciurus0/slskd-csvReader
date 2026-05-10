@@ -6,16 +6,16 @@ from __future__ import annotations
 
 import csv
 import os
-import re
 import sys
 import time
-import unicodedata
 from datetime import datetime
+from io import StringIO
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from slskd_config import ALBUM_PREFERRED_SEARCH as _CONFIG_ALBUM_PREF
 from slskd_csv import (
-    count_csv_rows,
+    decode_pipeline_text,
     generate_report,
     find_most_recent_results_csv,
     load_failed_rows,
@@ -61,27 +61,6 @@ def configure_worker_context(
     _batch_size = batch_size
     _checkpoint_file = checkpoint_file
     _album_preferred_search = album_preferred_search
-
-
-def sanitize_filename(name: str, replacement: str = " ") -> str:
-    """
-    Sanitize a filename by replacing forbidden characters with spaces.
-    Preserves Unicode characters like accented letters, Japanese, Chinese, etc.
-    """
-    if not name:
-        return ""
-
-    name = unicodedata.normalize("NFKC", name)
-    name = re.sub(r"[\x00-\x1f\x7f]", "", name)
-    forbidden = r'[\/:*?"<>|]'
-    name = re.sub(forbidden, replacement, name)
-    name = name.rstrip(" .")
-    name = re.sub(r"\s+", " ", name)
-
-    if not name.strip():
-        return "unnamed"
-
-    return name.strip()
 
 
 class Stats:
@@ -169,25 +148,13 @@ async def process_row(client, row, row_index, total_rows):
         }
     )
 
-    raw_artist = (row.get("artist") or "").strip()
-    raw_album = (row.get("album") or "").strip()
-    raw_track = (row.get("track") or "").strip()
-
-    if any(ord(c) > 127 for c in raw_artist + raw_album + raw_track):
-        logger.info(f"Found Unicode characters in row {row_index}:")
-        logger.info(f"  Raw artist: {repr(raw_artist)}")
-        logger.info(f"  Raw album: {repr(raw_album)}")
-        logger.info(f"  Raw track: {repr(raw_track)}")
-
-    artist = sanitize_filename(raw_artist)
-    album = sanitize_filename(raw_album)
-    track = sanitize_filename(raw_track)
+    # Rows are expected to be sanitized when written by merge_queue.py (to_queue.csv).
+    artist = (row.get("artist") or "").strip()
+    album = (row.get("album") or "").strip()
+    track = (row.get("track") or "").strip()
 
     if any(ord(c) > 127 for c in artist + album + track):
-        logger.info("After sanitization:")
-        logger.info(f"  Artist: {repr(artist)}")
-        logger.info(f"  Album: {repr(album)}")
-        logger.info(f"  Track: {repr(track)}")
+        logger.info(f"Unicode in row {row_index}: artist={artist!r} album={album!r} track={track!r}")
 
     if not artist:
         result_entry["message"] = "Missing artist (required)"
@@ -333,104 +300,28 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
         total_rows = len(rows_to_process)
         logger.info(f"Retry mode: Processing {total_rows} failed rows from previous run")
     else:
-        total_rows = count_csv_rows(csv_file)
+        try:
+            raw_bytes = Path(csv_file).read_bytes()
+            text = decode_pipeline_text(raw_bytes)
+        except UnicodeDecodeError as e:
+            logger.error(
+                "CSV must be UTF-8 (optional BOM). Re-export or run merge_queue.py to rebuild "
+                "to_queue.csv: %s (%s)",
+                csv_file,
+                e,
+            )
+            sys.exit(1)
+        except OSError as e:
+            logger.error("Could not read CSV file %s: %s", csv_file, e)
+            sys.exit(1)
+
+        all_rows = list(csv.DictReader(StringIO(text)))
+        total_rows = len(all_rows)
         if total_rows == 0:
-            logger.error("CSV file is empty or couldn't be read")
+            logger.error("CSV file has no data rows (UTF-8): %s", csv_file)
             sys.exit(1)
 
-        if total_rows > 1000:
-            logger.info(f"Large file detected ({total_rows} rows). Using streaming mode.")
-            encodings = [
-                "utf-8",
-                "utf-8-sig",
-                "latin-1",
-                "cp1252",
-                "iso-8859-1",
-                "utf-16",
-                "utf-16-le",
-                "utf-16-be",
-            ]
-            success = False
-
-            for encoding in encodings:
-                try:
-                    with open(csv_file, newline="", encoding=encoding) as f:
-                        reader = csv.DictReader(f)
-                        for _ in range(start_row):
-                            next(reader, None)
-
-                        batch: List[Dict[str, Any]] = []
-                        batch_count = 0
-                        for i, row in enumerate(reader, start=start_row):
-                            batch.append(row)
-
-                            if len(batch) >= _batch_size or i == total_rows - 1:
-                                batch_count += 1
-                                logger.info(
-                                    f"Processing batch {batch_count}: rows {i - len(batch) + 1} to {i} of {total_rows}"
-                                )
-
-                                await process_batch(client, batch, i - len(batch) + 1, total_rows)
-
-                                batch = []
-
-                                save_checkpoint(
-                                    _checkpoint_file, i, total_rows, _stats, _results_log
-                                )
-
-                    success = True
-                    logger.info(f"Successfully processed CSV with {encoding} encoding")
-                    break
-                except UnicodeDecodeError as e:
-                    if "utf-16" in encoding and "BOM" in str(e):
-                        logger.debug(f"Skipping {encoding} - file doesn't have BOM")
-                    else:
-                        logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
-                except Exception as e:
-                    logger.error(f"Error processing CSV with {encoding} encoding: {e}")
-
-            if not success:
-                logger.error("Failed to process CSV with any encoding")
-                sys.exit(1)
-
-            generate_report(_csv_file, _results_log, _log_dir)
-            return
-
-        encodings = [
-            "utf-8-sig",
-            "utf-8",
-            "latin-1",
-            "cp1252",
-            "iso-8859-1",
-            "utf-16",
-            "utf-16-le",
-            "utf-16-be",
-        ]
-        success = False
-
-        for encoding in encodings:
-            try:
-                with open(csv_file, newline="", encoding=encoding) as f:
-                    reader = csv.DictReader(f)
-                    all_rows = list(reader)
-
-                    rows_to_process = all_rows[start_row:]
-
-                success = True
-                logger.info(f"Successfully read CSV with {encoding} encoding")
-                break
-            except UnicodeDecodeError as e:
-                if "utf-16" in encoding and "BOM" in str(e):
-                    logger.debug(f"Skipping {encoding} - file doesn't have BOM")
-                else:
-                    logger.warning(f"Failed to decode CSV with {encoding} encoding, trying next...")
-            except Exception as e:
-                logger.error(f"Error reading CSV with {encoding} encoding: {e}")
-
-        if not success:
-            logger.error("Failed to read CSV with any encoding")
-            sys.exit(1)
-
+        rows_to_process = all_rows[start_row:]
         logger.info(f"Starting CSV processing: {total_rows} rows total, beginning at row {start_row}")
 
     try:

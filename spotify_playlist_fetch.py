@@ -46,11 +46,11 @@ Usage:
     python3 spotify_playlist_fetch.py 37i9dQZF1DXcBWIGoYBM5M -o my_playlist.csv
     python3 spotify_playlist_fetch.py --list 1
     python3 spotify_playlist_fetch.py --list-playlists --list-limit 1
-    python3 spotify_playlist_fetch.py --pick 3 -o playlist_import.csv
+    python3 spotify_playlist_fetch.py --pick 3 -o my_export.csv
     python3 spotify_playlist_fetch.py --login-only
     SPOTIFY_DEBUG=1 python3 spotify_playlist_fetch.py --list 1
 
-Exports one CSV row per playlist item (including removed tracks, local files, episodes).
+Exports one CSV row per music track (including removed tracks, local files). Podcast episodes are omitted.
 No market/availability filter. Playlist listing shows track counts only when the API includes them (? otherwise).
 
 Throttle/stall protections:
@@ -69,7 +69,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import csv
 import hashlib
 import json
 import os
@@ -80,6 +79,7 @@ import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -87,6 +87,8 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import requests
 
 from slskd_config import load_api_txt
+from slskd_csv import atomic_write_pipeline_csv
+from slskd_sanitize import sanitize_queue_field
 
 ACCOUNTS_AUTHORIZE_URL = "https://accounts.spotify.com/authorize"
 ACCOUNTS_TOKEN_URL = "https://accounts.spotify.com/api/token"
@@ -514,13 +516,6 @@ def playlist_item_to_row(item: Dict[str, Any]) -> Tuple[str, str, str]:
     if tr is None:
         return ("", "", "")
 
-    ttype = tr.get("type")
-    if ttype == "episode":
-        show = tr.get("show") or {}
-        show_name = (show.get("name") or "").strip()
-        ep_name = (tr.get("name") or "").strip()
-        return (show_name, "", ep_name)
-
     artists = tr.get("artists") or []
     names = [a.get("name", "").strip() for a in artists if a.get("name")]
     artist = "; ".join(names) if names else ""
@@ -535,10 +530,7 @@ def fetch_playlist_track_rows(token: str, playlist_id: str) -> List[Tuple[str, s
     """Fetch every playlist item row (paginated). One CSV row per API item, no market filter."""
     rows: List[Tuple[str, str, str]] = []
     url = f"{API_BASE}/playlists/{playlist_id}/items"
-    params: Dict[str, Any] = {
-        "limit": PLAYLIST_ITEMS_PAGE_LIMIT,
-        "additional_types": "episode",
-    }
+    params: Dict[str, Any] = {"limit": PLAYLIST_ITEMS_PAGE_LIMIT}
     start_ts = time.time()
 
     session = requests.Session()
@@ -557,6 +549,9 @@ def fetch_playlist_track_rows(token: str, playlist_id: str) -> List[Tuple[str, s
             throttle_cache_path=DEFAULT_THROTTLE_CACHE,
         )
         for item in payload.get("items") or []:
+            tr = item.get("item") or item.get("track")
+            if tr and tr.get("type") == "episode":
+                continue
             rows.append(playlist_item_to_row(item))
 
         next_url = payload.get("next")
@@ -576,7 +571,7 @@ def _fetch_playlist_total_quick(session: requests.Session, playlist_id: str) -> 
     if not pid:
         return -1
     url = f"{API_BASE}/playlists/{pid}/items"
-    params: Dict[str, Any] = {"limit": 1, "additional_types": "episode"}
+    params: Dict[str, Any] = {"limit": 1}
 
     try:
         payload = _spotify_get_json(
@@ -686,11 +681,17 @@ def print_user_playlists(playlists: List[Dict[str, Any]]) -> None:
 
 
 def write_csv(path: str, rows: Iterable[Tuple[str, str, str]]) -> None:
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["artist", "album", "track"])
-        w.writeheader()
-        for artist, album, track in rows:
-            w.writerow({"artist": artist, "album": album, "track": track})
+    atomic_write_pipeline_csv(
+        path,
+        [
+            {
+                "artist": sanitize_queue_field(a),
+                "album": sanitize_queue_field(b),
+                "track": sanitize_queue_field(c),
+            }
+            for a, b, c in rows
+        ],
+    )
 
 
 def main() -> None:
@@ -713,8 +714,8 @@ def main() -> None:
     parser.add_argument(
         "-o",
         "--output",
-        default="playlist_import.csv",
-        help="Output CSV path (default: playlist_import.csv)",
+        default=None,
+        help="Output CSV path (default: YYYYMMDD-spotify-export.csv, local date)",
     )
     parser.add_argument(
         "--list-playlists",
@@ -799,6 +800,14 @@ def main() -> None:
             _die("--list-limit must be >= 1")
         if not args.list_playlists:
             _die("--list-limit only applies with --list-playlists.")
+
+    needs_export = (
+        not args.list_playlists
+        and not args.login_only
+        and (args.pick is not None or bool(args.playlist))
+    )
+    if needs_export and args.output is None:
+        args.output = f"{datetime.now().strftime('%Y%m%d')}-spotify-export.csv"
 
     token_path = args.token_cache or DEFAULT_TOKEN_CACHE
     client_id = (

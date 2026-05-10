@@ -14,7 +14,7 @@ Supports single-track or full-album queueing with advanced features:
 - Retry-failed mode for failed downloads
 - Queued download tracking (records enqueued files; no background status polling)
 - Queue management with configurable limits
-- Filename sanitization for special characters
+- Queue CSV (to_queue.csv) should be produced by merge_queue.py so artist/album/track fields are sanitized once before searching
 
 API Key Loading:
 ----------------
