@@ -18,7 +18,7 @@ Supports single-track or full-album queueing with advanced features:
 
 API Key Loading:
 ----------------
-This script requires an API key to access your SLSKD server. The API key can be provided in one of two ways:
+This script requires an API key to access your SLSKD server. The key can be provided in one of these ways:
 
 1. Environment Variable (Recommended for CI/servers):
    Set the environment variable `SLSKD_API_KEY` before running the script:
@@ -26,14 +26,26 @@ This script requires an API key to access your SLSKD server. The API key can be 
        python3 slskd-spotify.py
 
 2. api.txt File (Recommended for local use):
-   Create a file named `api.txt` in the same directory as this script and put your API key in it (no quotes, no extra whitespace):
-       your-api-key-here
-   The script will automatically read the key from this file if the environment variable is not set.
+   Create `api.txt` in the same directory as this script (repo root). Two supported layouts:
+
+   **Legacy:** one line, SLSKD API key only (no '=' or '[' in the file):
+       your-slskd-api-key-here
+
+   **INI (includes optional Spotify block used by spotify_playlist_fetch.py):**
+       [slskd]
+       api_key = your-slskd-api-key-here
+
+       [spotify]
+       client_id = ...
+       client_secret = ...
+       redirect_uri = http://127.0.0.1:8765/callback
+
+   Environment variables override values from api.txt when both are set.
 
 Security Notes:
 - The `api.txt` file is included in `.gitignore` and will not be committed to version control.
-- Never share your API key or commit it to a public repository.
-- If neither the environment variable nor the `api.txt` file is found, the script will log an error and exit.
+- Never share your API keys or commit them to a public repository.
+- If neither `SLSKD_API_KEY` nor a readable key in api.txt is available, SLSKD requests will fail once used.
 
 Command-line Options:
 ------------------
