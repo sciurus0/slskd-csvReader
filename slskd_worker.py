@@ -20,6 +20,7 @@ from slskd_csv import (
     find_most_recent_results_csv,
     load_failed_rows,
     save_checkpoint,
+    write_pending_queue_csv,
 )
 from slskd_logging import logger
 from slskd_queue import (
@@ -27,6 +28,8 @@ from slskd_queue import (
     enqueue_files_async,
     find_best_available_candidate,
     initialize_slskd_client,
+    snapshot_queued_files_tracker,
+    wait_and_reconcile_downloads,
 )
 from slskd_query import build_query_candidates
 from slskd_search import detect_search_intent, rank_all_results, search_slskd_async
@@ -39,6 +42,10 @@ _csv_file: str = ""
 _batch_size: int = 0
 _checkpoint_file: str = ""
 _album_preferred_search: bool = _CONFIG_ALBUM_PREF
+_download_settle_seconds: float = 600.0
+_skip_download_reconcile: bool = False
+_write_pending_csv: bool = True
+_pending_csv_path: Optional[str] = None
 
 
 def configure_worker_context(
@@ -50,10 +57,16 @@ def configure_worker_context(
     batch_size: int,
     checkpoint_file: str,
     album_preferred_search: bool,
+    download_settle_seconds: float = 600.0,
+    skip_download_reconcile: bool = False,
+    write_pending_csv: bool = True,
+    pending_csv_path: Optional[str] = None,
 ) -> None:
     """Bind mutable state and paths used by the CSV workflow engine."""
     global _results_log, _stats, _log_dir, _csv_file, _batch_size
     global _checkpoint_file, _album_preferred_search
+    global _download_settle_seconds, _skip_download_reconcile
+    global _write_pending_csv, _pending_csv_path
 
     _results_log = results_log
     _stats = stats
@@ -62,6 +75,89 @@ def configure_worker_context(
     _batch_size = batch_size
     _checkpoint_file = checkpoint_file
     _album_preferred_search = album_preferred_search
+    _download_settle_seconds = download_settle_seconds
+    _skip_download_reconcile = skip_download_reconcile
+    _write_pending_csv = write_pending_csv
+    _pending_csv_path = pending_csv_path
+
+
+def _maybe_write_pending_queue_csv() -> None:
+    if not _write_pending_csv or not _results_log:
+        return
+    write_pending_queue_csv(
+        _csv_file,
+        _results_log,
+        pending_csv=_pending_csv_path,
+    )
+
+
+async def reconcile_downloads_only(
+    *,
+    results_log: List[Dict[str, Any]],
+    queued_files_tracker: List[Dict[str, Any]],
+    csv_file: str,
+    log_dir: str,
+    checkpoint_file: str,
+    settle_seconds: float = 0.0,
+    stats: Optional[Any] = None,
+    write_pending_csv: bool = True,
+    pending_csv_path: Optional[str] = None,
+) -> bool:
+    """
+    Poll SLSKD for download completion and refresh results/report from saved state.
+
+    Returns True if reconciliation ran, False if there was nothing to reconcile.
+    """
+    if not queued_files_tracker:
+        logger.error(
+            "No tracked enqueues. Use a checkpoint with queued_files_tracker, "
+            "or --reconcile-log pointing at an slskd_import_*.log from the run."
+        )
+        return False
+
+    if not results_log:
+        logger.error("No results to reconcile.")
+        return False
+
+    logger.info(
+        "Standalone download reconciliation: %d result row(s), %d tracked file(s)",
+        len(results_log),
+        len(queued_files_tracker),
+    )
+
+    await wait_and_reconcile_downloads(
+        results_log,
+        settle_seconds=settle_seconds,
+        prepare_rows=True,
+        reverify_success=True,
+    )
+
+    if stats is not None:
+        stats.recalculate_from_results(results_log)
+        logger.info(
+            "After reconciliation — successful downloads: %s, not successful: %s",
+            stats.successful,
+            stats.failed,
+        )
+
+    generate_report(csv_file, results_log, log_dir)
+    if write_pending_csv:
+        write_pending_queue_csv(
+            csv_file,
+            results_log,
+            pending_csv=pending_csv_path,
+        )
+
+    total_rows = len(results_log)
+    save_checkpoint(
+        checkpoint_file,
+        next_row_index=total_rows,
+        total_rows=total_rows,
+        stats=stats if stats is not None else Stats(),
+        results_log=results_log,
+        queued_files_tracker=queued_files_tracker,
+    )
+    return True
 
 
 class Stats:
@@ -113,6 +209,12 @@ class Stats:
         self.last_update_time = current_time
         self.last_total_processed = self.total_processed
 
+    def recalculate_from_results(self, results_log: List[Dict[str, Any]]) -> None:
+        """Recompute success/fail counts after download reconciliation."""
+        terminal = [r for r in results_log if (r.get("status") or "").lower() != "skipped"]
+        self.successful = sum(1 for r in terminal if (r.get("status") or "").lower() == "success")
+        self.failed = len(terminal) - self.successful
+
     def print_progress(self, total_remaining):
         self.update_metrics(total_remaining)
 
@@ -149,6 +251,7 @@ async def process_row(client, row, row_index, total_rows):
             "search_query_used": "",
             "search_strategy": "",
             "search_variant": "",
+            "row_index": row_index,
         }
     )
 
@@ -248,7 +351,9 @@ async def process_row(client, row, row_index, total_rows):
             has_open_slot, queue_count = await check_queue_status(best_username)
             if has_open_slot:
                 files_to_queue = [t["file_info"] for t in album_tracks]
-                files_queued = await enqueue_files_async(client, best_username, files_to_queue)
+                files_queued = await enqueue_files_async(
+                    client, best_username, files_to_queue, row_index=row_index
+                )
             else:
                 result_entry["status"] = "failed"
                 result_entry["message"] = f"Queue full for user {best_username}"
@@ -264,22 +369,27 @@ async def process_row(client, row, row_index, total_rows):
                 return False
 
             files_queued = await enqueue_files_async(
-                client, best_candidate["username"], [best_candidate["file_info"]]
+                client,
+                best_candidate["username"],
+                [best_candidate["file_info"]],
+                row_index=row_index,
             )
 
             if _album_preferred_search and best_candidate:
                 result_entry["has_album_match"] = best_candidate.get("has_album_match", False)
 
         if files_queued > 0:
-            result_entry["status"] = "success"
+            result_entry["status"] = "enqueued"
             result_entry["files_queued"] = files_queued
 
             if _album_preferred_search and not result_entry.get("has_album_match", True):
                 result_entry[
                     "message"
-                ] = f"Successfully queued {files_queued} file(s) [FALLBACK - no album match]"
+                ] = f"Enqueued {files_queued} file(s); awaiting download reconciliation [FALLBACK - no album match]"
             else:
-                result_entry["message"] = f"Successfully queued {files_queued} file(s)"
+                result_entry["message"] = (
+                    f"Enqueued {files_queued} file(s); awaiting download reconciliation"
+                )
 
             _results_log.append(result_entry)
             return True
@@ -361,9 +471,30 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
         )
         logger.info(f"Failed: {_stats.failed}")
         logger.info(f"Total files enqueued: {_stats.enqueued_files}")
+
+        if not _skip_download_reconcile:
+            await wait_and_reconcile_downloads(
+                _results_log, settle_seconds=_download_settle_seconds
+            )
+            _stats.recalculate_from_results(_results_log)
+
+        logger.info(
+            f"After reconciliation — successful downloads: {_stats.successful}, "
+            f"not successful: {_stats.failed}"
+        )
         logger.info("=" * 50)
 
         generate_report(_csv_file, _results_log, _log_dir)
+        _maybe_write_pending_queue_csv()
+
+        save_checkpoint(
+            _checkpoint_file,
+            next_row_index=total_rows,
+            total_rows=total_rows,
+            stats=_stats,
+            results_log=_results_log,
+            queued_files_tracker=snapshot_queued_files_tracker(),
+        )
 
 
 async def process_batch(client, rows, start_index, total_rows):
@@ -387,8 +518,15 @@ async def process_batch(client, rows, start_index, total_rows):
             else:
                 _stats.failed += 1
 
-            if row_index % 5 == 0 or row_index == total_rows:
-                save_checkpoint(_checkpoint_file, row_index, total_rows, _stats, _results_log)
+            if row_index % 5 == 0 or row_index == total_rows - 1:
+                save_checkpoint(
+                    _checkpoint_file,
+                    next_row_index=row_index + 1,
+                    total_rows=total_rows,
+                    stats=_stats,
+                    results_log=_results_log,
+                    queued_files_tracker=snapshot_queued_files_tracker(),
+                )
 
             if _stats.total_processed % 20 == 0:
                 remaining = total_rows - row_index
