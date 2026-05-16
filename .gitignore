@@ -10,6 +10,9 @@ PROJECT_PLAN.md
 # CSV pipeline data (exports, queues, reports — not tracked)
 *.csv
 
+# Cross-run merge watermarks (ledger is *.csv)
+merge_state.json
+
 # Python bytecode (keep repo to source only)
 __pycache__/
 *.py[cod]

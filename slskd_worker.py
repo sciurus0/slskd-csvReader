@@ -32,6 +32,7 @@ from slskd_queue import (
     wait_and_reconcile_downloads,
 )
 from slskd_query import build_query_candidates
+from slskd_pipeline_state import record_successful_downloads
 from slskd_search import detect_search_intent, rank_all_results, search_slskd_async
 
 # Runtime mirrors CLI-overridden settings in the entry script (see configure_worker_context).
@@ -91,6 +92,15 @@ def _maybe_write_pending_queue_csv() -> None:
     )
 
 
+def _maybe_record_success_ledger() -> None:
+    if not _results_log:
+        return
+    workspace = Path(_csv_file).resolve().parent
+    appended = record_successful_downloads(workspace, _results_log)
+    if appended:
+        logger.info("Appended %d row(s) to success ledger", appended)
+
+
 async def reconcile_downloads_only(
     *,
     results_log: List[Dict[str, Any]],
@@ -147,6 +157,11 @@ async def reconcile_downloads_only(
             results_log,
             pending_csv=pending_csv_path,
         )
+
+    workspace = Path(csv_file).resolve().parent
+    appended = record_successful_downloads(workspace, results_log)
+    if appended:
+        logger.info("Appended %d row(s) to success ledger", appended)
 
     total_rows = len(results_log)
     save_checkpoint(
@@ -486,6 +501,7 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
 
         generate_report(_csv_file, _results_log, _log_dir)
         _maybe_write_pending_queue_csv()
+        _maybe_record_success_ledger()
 
         save_checkpoint(
             _checkpoint_file,
