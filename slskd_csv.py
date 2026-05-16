@@ -295,6 +295,71 @@ def generate_report(
         return None, None
 
 
+_DOWNLOAD_SUCCESS_STATUS = "success"
+
+
+def default_pending_csv_path(csv_file: str) -> str:
+    """``to_queue.csv`` → ``to_queue_pending.csv`` in the same directory."""
+    base, ext = os.path.splitext(csv_file)
+    if base.endswith("_pending"):
+        return csv_file
+    return f"{base}_pending{ext or '.csv'}"
+
+
+def write_pending_queue_csv(
+    csv_file: str,
+    results_log: List[Dict[str, Any]],
+    *,
+    pending_csv: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Write a retry-ready queue CSV with rows that did not complete download.
+
+    Only ``success`` (completed download after reconciliation) is omitted.
+    The original input CSV is never modified.
+    """
+    if not results_log:
+        logger.info("No results; skipping pending queue CSV.")
+        return None
+
+    pending_path = pending_csv or default_pending_csv_path(csv_file)
+    pending_rows: List[Dict[str, str]] = []
+    skipped_success = 0
+
+    ordered = sorted(
+        results_log,
+        key=lambda r: (
+            int(r["row_index"]) if r.get("row_index") not in (None, "") else 10**9
+        ),
+    )
+    for entry in ordered:
+        status = (entry.get("status") or "").lower()
+        if status == _DOWNLOAD_SUCCESS_STATUS:
+            skipped_success += 1
+            continue
+        pending_rows.append(
+            {
+                "artist": str(entry.get("artist") or ""),
+                "album": str(entry.get("album") or ""),
+                "track": str(entry.get("track") or ""),
+            }
+        )
+
+    try:
+        atomic_write_pipeline_csv(pending_path, pending_rows)
+        pending_abs = os.path.abspath(pending_path)
+        logger.info(
+            "Pending queue CSV: %s (%d row(s); %d completed download(s) omitted)",
+            pending_abs,
+            len(pending_rows),
+            skipped_success,
+        )
+        return pending_abs
+    except OSError as e:
+        logger.error("Error writing pending queue CSV %s: %s", pending_path, e)
+        return None
+
+
 def generate_report_on_demand(
     csv_file: str,
     results_log: List[Dict[str, Any]],

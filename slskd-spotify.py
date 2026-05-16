@@ -13,6 +13,7 @@ Supports single-track or full-album queueing with advanced features:
 - Format prioritization (.mp3 → .m4a → .flac)
 - Retry-failed mode for failed downloads
 - Post-run download reconciliation (settle wait, then poll transfers API; success = completed download)
+- Post-run pending queue CSV (<input>_pending.csv) for rows without completed download
 - Queue management with configurable limits
 - Queue CSV (to_queue.csv) should be produced by merge_queue.py so artist/album/track fields are sanitized once before searching
 
@@ -99,6 +100,9 @@ Command-line Options:
                         Results CSV for --reconcile-downloads (default: newest in -o)
 
   --reconcile-log PATH  Import log for tracked filenames (default: newest slskd_import_*.log)
+
+  --skip-pending-csv    Do not write <input>_pending.csv after a run
+  --pending-csv PATH    Override pending queue path (default: <input>_pending.csv)
                         
   --exact-match         Require exact artist-album-track matching instead of partial matching
                         When enabled, only files with exact matches to the specified pattern are selected
@@ -279,6 +283,8 @@ async def _run_reconcile_downloads_mode(args: argparse.Namespace) -> None:
         checkpoint_file=args.checkpoint_file,
         settle_seconds=settle,
         stats=reconcile_stats,
+        write_pending_csv=not args.skip_pending_csv,
+        pending_csv_path=args.pending_csv,
     )
 
 
@@ -347,6 +353,17 @@ async def main():
         "--checkpoint-file",
         default=CHECKPOINT_FILE,
         help=f"Checkpoint pickle path (default: {CHECKPOINT_FILE})",
+    )
+    parser.add_argument(
+        "--skip-pending-csv",
+        action="store_true",
+        help="Do not write a pending retry queue CSV after the run",
+    )
+    parser.add_argument(
+        "--pending-csv",
+        metavar="PATH",
+        default=None,
+        help="Pending retry queue path (default: <input-stem>_pending.csv beside input)",
     )
     args = parser.parse_args()
     
@@ -448,6 +465,8 @@ async def main():
         album_preferred_search=ALBUM_PREFERRED_SEARCH,
         download_settle_seconds=args.download_settle_seconds,
         skip_download_reconcile=args.skip_download_reconcile,
+        write_pending_csv=not args.skip_pending_csv,
+        pending_csv_path=args.pending_csv,
     )
 
     try:
