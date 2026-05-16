@@ -4,6 +4,9 @@
 /logs
 /api.txt
 
+# Local planning doc (not tracked)
+PROJECT_PLAN.md
+
 # CSV pipeline data (exports, queues, reports — not tracked)
 *.csv
 
