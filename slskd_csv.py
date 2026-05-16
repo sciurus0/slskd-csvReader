@@ -46,14 +46,18 @@ def read_pipeline_csv_rows(path: str) -> List[Dict[str, str]]:
     return list(csv.DictReader(StringIO(text)))
 
 
-def atomic_write_pipeline_csv(path: str | Path, rows: List[Dict[str, str]]) -> None:
+def atomic_write_pipeline_csv(
+    path: str | Path,
+    rows: List[Dict[str, str]],
+    *,
+    fieldnames: Tuple[str, ...] = ("artist", "album", "track"),
+) -> None:
     """
     Write UTF-8 BOM pipeline CSV: quote all fields, Unix newlines (Excel-safe apostrophes, etc.).
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    fieldnames = ("artist", "album", "track")
     try:
         with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(
