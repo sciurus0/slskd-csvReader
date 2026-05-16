@@ -16,6 +16,9 @@ Supports single-track or full-album queueing with advanced features:
 - Post-run pending queue CSV (<input>_pending.csv) for rows without completed download
 - Queue management with configurable limits
 - Queue CSV (to_queue.csv) should be produced by merge_queue.py so artist/album/track fields are sanitized once before searching
+- Bounded fallback query generation for Soulseek searches
+- Literal query first (punctuation preserved), punctuation-softened fallback second
+- Strict candidate ranking against CSV fields (artist/album/track), with optional weak duration tie-break
 
 API Key Loading:
 ----------------
@@ -110,12 +113,12 @@ Command-line Options:
 
   --album-preferred-search
                         Use broader search with album preference and quality filtering
-                        Searches for Artist-Track (broader) instead of Artist-Album-Track (strict)
+                        Uses bounded query attempts (literal first, softened fallback) for better recall
                         Prioritizes files where album appears in the path (directory or filename)
                         Falls back to files without album match when no better option exists
                         Automatically filters out unwanted versions (remixes, live, covers, etc.)
                         unless explicitly requested in the search query
-                        Increases success rate while maintaining quality control
+                        Selection still uses strict ranking against artist/album/track metadata
 
   --queue-limit N       Maximum items in queue per user (default: 0)
                         Set to 0 for no limit
