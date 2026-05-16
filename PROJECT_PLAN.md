@@ -6,7 +6,7 @@ High-level goals for expanding the existing `slskd-spotify.py` workflow into a m
 
 ### Roadmap
 
-- Auto-download a tracklist from a specific Spotify playlist. *(Implemented by `spotify_playlist_fetch.py`: **OAuth 2.0 + PKCE**, refresh token cache default `~/.config/slskd/spotify_tokens.json`, env `**SPOTIFY_CLIENT_ID*`* required; register `**SPOTIFY_REDIRECT_URI**` (default `http://127.0.0.1:8765/callback`) on the Spotify app. Optional `**SPOTIFY_CLIENT_SECRET**` if your app type requires it for token exchange. Optional `**api.txt**` INI `[spotify]` section. End-to-end **API pull + export still to be smoke-tested** as the pipeline input.)*
+- Auto-download a tracklist from a specific Spotify playlist. **Done (Phase A)** — `spotify_playlist_fetch.py`: OAuth 2.0 + PKCE, refresh token cache (`~/.config/slskd/spotify_tokens.json`), playlist list/export by URL/ID or `--pick` (single or comma-separated), default `YYYYMMDD-spotify-export.csv`, lean 429 handling. **Sanitization is not applied here** (only in `merge_queue.py`). Smoke-test on your machine after API cooldown if needed.
 - Convert the downloaded tracklist into the proper sanitized format for use by the existing script.
 - Append those new songs to the existing download file.
 - Automatically clean up the output file after the script is complete to remove successfully downloaded items.
@@ -32,7 +32,7 @@ Documentation for a future **single entrypoint** so the operator runs **one comm
 | --- | --- |
 | Spotify OAuth + token cache | **`spotify_playlist_fetch.py`** |
 | Numbered playlist listing | **`--list-playlists`** / **`--list N`** |
-| Single-playlist export | URL / ID / **`--pick`** |
+| Single- or multi-playlist export | URL / ID / **`--pick N`** or **`--pick 1,4,7`** → one dated CSV |
 | Merge backup + export → **`to_queue.csv`** | **`merge_queue.py`** (expects one dated **`YYYYMMDD-spotify-export.csv`** per current contract) |
 | UTF-8 BOM queue + sanitize-at-merge | Implemented per queue-merge backlog decisions |
 | Soulseek / slskd batch processing | **`slskd-spotify.py`** reading **`to_queue.csv`** |
@@ -91,8 +91,26 @@ With user OAuth, **reliably enumerate playlist tracks** via the Web API, **map t
 | **Playlist selection** | **Priority:** pick from the **user’s playlist list** (API-driven list UX). **Proof of concept:** smoke-test with a single **playlist URL or ID** first.                                                                                                                                                                                 |
 | **Completeness**       | Export the **full list** of playlist items as the API returns them. **Do not** filter to “Spotify-playable” or regional availability only. Include rows where `track` is missing or incomplete (removed tracks, local files, etc.) using **best-effort columns** / empty fields—capture the **whole list**, not only streamable tracks. |
 | **Market**             | **Do not** rely on `market` behavior for availability; we record API output as-is.                                                                                                                                                                                                                                                      |
-| **Artifact**           | **CSV only** for now. Optional JSON sidecar (e.g. for `added_at`, Spotify IDs, delta imports) is **shelved** until there is a concrete need.                                                                                                                                                                                            |
-| **Current status**     | OAuth **token cache works**, but **nothing else has been completed end-to-end** yet (no verified full pull-through as the sole automation input).                                                                                                                                                                                       |
+| **Artifact**           | **CSV only** (wide export schema below). JSON sidecar shelved. `merge_queue.py` reads **artist/album/track** only; other columns are stored for future use.                                                                                                                                                                                            |
+| **Current status**     | **Phase A complete:** OAuth, list/export, multi-`--pick`, lean throttle handling. Export uses locked column set (see **Spotify export CSV contract**). Smoke-test after changes before commit.                                                                                                                                                                                       |
+
+#### Spotify export CSV contract (locked)
+
+Written by `spotify_playlist_fetch.py` (default `YYYYMMDD-spotify-export.csv`). UTF-8 with BOM. Raw API values — **no** sanitization at export.
+
+| Column | Source | Notes |
+| --- | --- | --- |
+| `artist` | `track.artists[]` joined with `"; "` | Empty when track missing |
+| `album` | `track.album.name` | |
+| `track` | `track.name` | |
+| `duration_ms` | `track.duration_ms` | Empty if missing |
+| `spotify_track_id` | `track.id` | Stable identity for dedup later |
+| `disc_number` | `track.disc_number` | |
+| `track_number` | `track.track_number` | |
+| `added_at` | playlist item `added_at` | For future delta exports |
+| `is_unavailable` | `true` if item has no track or `is_playable` is false; else `false` | Not a Spotify field name; export convention |
+
+Episodes are omitted at fetch time. `merge_queue.py` ignores columns beyond artist/album/track until explicitly wired.
 
 
 #### Lean API mode (anti-throttle strategy)
