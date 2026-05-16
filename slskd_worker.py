@@ -20,6 +20,7 @@ from slskd_csv import (
     find_most_recent_results_csv,
     load_failed_rows,
     save_checkpoint,
+    write_pending_queue_csv,
 )
 from slskd_logging import logger
 from slskd_queue import (
@@ -42,6 +43,8 @@ _checkpoint_file: str = ""
 _album_preferred_search: bool = _CONFIG_ALBUM_PREF
 _download_settle_seconds: float = 600.0
 _skip_download_reconcile: bool = False
+_write_pending_csv: bool = True
+_pending_csv_path: Optional[str] = None
 
 
 def configure_worker_context(
@@ -55,11 +58,14 @@ def configure_worker_context(
     album_preferred_search: bool,
     download_settle_seconds: float = 600.0,
     skip_download_reconcile: bool = False,
+    write_pending_csv: bool = True,
+    pending_csv_path: Optional[str] = None,
 ) -> None:
     """Bind mutable state and paths used by the CSV workflow engine."""
     global _results_log, _stats, _log_dir, _csv_file, _batch_size
     global _checkpoint_file, _album_preferred_search
     global _download_settle_seconds, _skip_download_reconcile
+    global _write_pending_csv, _pending_csv_path
 
     _results_log = results_log
     _stats = stats
@@ -70,6 +76,18 @@ def configure_worker_context(
     _album_preferred_search = album_preferred_search
     _download_settle_seconds = download_settle_seconds
     _skip_download_reconcile = skip_download_reconcile
+    _write_pending_csv = write_pending_csv
+    _pending_csv_path = pending_csv_path
+
+
+def _maybe_write_pending_queue_csv() -> None:
+    if not _write_pending_csv or not _results_log:
+        return
+    write_pending_queue_csv(
+        _csv_file,
+        _results_log,
+        pending_csv=_pending_csv_path,
+    )
 
 
 async def reconcile_downloads_only(
@@ -81,6 +99,8 @@ async def reconcile_downloads_only(
     checkpoint_file: str,
     settle_seconds: float = 0.0,
     stats: Optional[Any] = None,
+    write_pending_csv: bool = True,
+    pending_csv_path: Optional[str] = None,
 ) -> bool:
     """
     Poll SLSKD for download completion and refresh results/report from saved state.
@@ -120,6 +140,12 @@ async def reconcile_downloads_only(
         )
 
     generate_report(csv_file, results_log, log_dir)
+    if write_pending_csv:
+        write_pending_queue_csv(
+            csv_file,
+            results_log,
+            pending_csv=pending_csv_path,
+        )
 
     total_rows = len(results_log)
     save_checkpoint(
@@ -437,6 +463,7 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
         logger.info("=" * 50)
 
         generate_report(_csv_file, _results_log, _log_dir)
+        _maybe_write_pending_queue_csv()
 
         save_checkpoint(
             _checkpoint_file,
