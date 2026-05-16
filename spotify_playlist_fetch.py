@@ -105,6 +105,7 @@ EXPORT_CSV_COLUMNS: Tuple[str, ...] = (
     "track",
     "duration_ms",
     "spotify_track_id",
+    "playlist_id",
     "disc_number",
     "track_number",
     "added_at",
@@ -548,14 +549,20 @@ def _export_int_field(value: Any) -> str:
         return ""
 
 
-def _empty_export_row(*, added_at: str = "", is_unavailable: str = "true") -> Dict[str, str]:
+def _empty_export_row(
+    *,
+    playlist_id: str = "",
+    added_at: str = "",
+    is_unavailable: str = "true",
+) -> Dict[str, str]:
     return {col: "" for col in EXPORT_CSV_COLUMNS} | {
+        "playlist_id": playlist_id,
         "added_at": added_at,
         "is_unavailable": is_unavailable,
     }
 
 
-def playlist_item_to_row(item: Dict[str, Any]) -> Dict[str, str]:
+def playlist_item_to_row(item: Dict[str, Any], *, playlist_id: str = "") -> Dict[str, str]:
     """
     Map one playlist item to an export row (EXPORT_CSV_COLUMNS).
 
@@ -568,7 +575,11 @@ def playlist_item_to_row(item: Dict[str, Any]) -> Dict[str, str]:
     added_at = (item.get("added_at") or "").strip()
     tr = item.get("item") or item.get("track")
     if tr is None:
-        return _empty_export_row(added_at=added_at, is_unavailable="true")
+        return _empty_export_row(
+            playlist_id=playlist_id,
+            added_at=added_at,
+            is_unavailable="true",
+        )
 
     artists = tr.get("artists") or []
     names = [a.get("name", "").strip() for a in artists if a.get("name")]
@@ -587,6 +598,7 @@ def playlist_item_to_row(item: Dict[str, Any]) -> Dict[str, str]:
         "track": title,
         "duration_ms": _export_int_field(tr.get("duration_ms")),
         "spotify_track_id": (tr.get("id") or "").strip(),
+        "playlist_id": (playlist_id or "").strip(),
         "disc_number": _export_int_field(tr.get("disc_number")),
         "track_number": _export_int_field(tr.get("track_number")),
         "added_at": added_at,
@@ -620,7 +632,7 @@ def fetch_playlist_track_rows(token: str, playlist_id: str) -> List[Dict[str, st
             tr = item.get("item") or item.get("track")
             if tr and tr.get("type") == "episode":
                 continue
-            rows.append(playlist_item_to_row(item))
+            rows.append(playlist_item_to_row(item, playlist_id=playlist_id))
 
         next_url = payload.get("next")
         url = next_url if next_url else None
