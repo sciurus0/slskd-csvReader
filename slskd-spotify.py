@@ -12,7 +12,8 @@ Supports single-track or full-album queueing with advanced features:
 - Timeout handling
 - Format prioritization (.mp3 → .m4a → .flac)
 - Retry-failed mode for failed downloads
-- Queued download tracking (records enqueued files; no background status polling)
+- Post-run download reconciliation (settle wait, then poll transfers API; success = completed download)
+- Post-run pending queue CSV (<input>_pending.csv) for rows without completed download
 - Queue management with configurable limits
 - Queue CSV (to_queue.csv) should be produced by merge_queue.py so artist/album/track fields are sanitized once before searching
 
@@ -90,6 +91,18 @@ Command-line Options:
   --gen-report          Generate a report from existing checkpoint data
                         Creates CSV reports without processing any new files
                         Useful if you need to recreate reports
+
+  --reconcile-downloads Re-poll SLSKD and update download statuses from a past run
+                        Re-checks success rows too (fixes false positives). Uses
+                        checkpoint when available; else newest results CSV + import log
+
+  --reconcile-from-csv PATH
+                        Results CSV for --reconcile-downloads (default: newest in -o)
+
+  --reconcile-log PATH  Import log for tracked filenames (default: newest slskd_import_*.log)
+
+  --skip-pending-csv    Do not write <input>_pending.csv after a run
+  --pending-csv PATH    Override pending queue path (default: <input>_pending.csv)
                         
   --exact-match         Require exact artist-album-track matching instead of partial matching
                         When enabled, only files with exact matches to the specified pattern are selected
@@ -139,6 +152,12 @@ Examples:
   
   # Generate reports from previous run
   python slskd-spotify.py --gen-report
+
+  # Re-run download reconciliation only (no new searches/enqueues)
+  python slskd-spotify.py --reconcile-downloads
+
+  # Reconcile using explicit artifacts
+  python slskd-spotify.py --reconcile-downloads --reconcile-from-csv logs/to_queue_results.csv --reconcile-log logs/slskd_import_20260516_094029.log
   
   # Use exact matching for tracks
   python slskd-spotify.py --exact-match
@@ -154,12 +173,23 @@ import argparse
 import asyncio
 import logging
 import sys
+from typing import Any, Dict, List, Optional
 
 from slskd_logging import DEFAULT_OUTPUT_DIR, logger, setup_logging
-from slskd_csv import load_checkpoint, generate_report, generate_report_on_demand
+from slskd_csv import (
+    checkpoint_resume_row,
+    load_tracker_from_newest_import_log,
+    find_matching_results_csv,
+    find_most_recent_results_csv,
+    generate_report,
+    generate_report_on_demand,
+    load_checkpoint,
+    load_results_log_from_csv,
+    rebuild_tracker_from_import_log,
+)
 from slskd_search import configure_search_context
 from slskd_queue import configure_queue_context
-from slskd_worker import Stats, configure_worker_context, process_csv
+from slskd_worker import Stats, configure_worker_context, process_csv, reconcile_downloads_only
 from slskd_config import (
     HOST,
     API_PATH,
@@ -172,6 +202,7 @@ from slskd_config import (
     SEARCH_TIMEOUT,
     ENQUEUE_TIMEOUT,
     CHECKPOINT_FILE,
+    DEFAULT_DOWNLOAD_SETTLE_SECONDS,
     EXCLUDED_EXTENSIONS,
     CIRCUIT_BREAKER_THRESHOLD,
     CIRCUIT_BREAKER_TIMEOUT,
@@ -198,6 +229,63 @@ HEADERS = make_headers(API_KEY)
 stats = Stats()
 results_log = []  # To track detailed results for reporting
 queued_files_tracker = []  # Global list to track all queued files for status checking
+
+
+async def _run_reconcile_downloads_mode(args: argparse.Namespace) -> None:
+    """Load prior run artifacts and re-run download reconciliation only."""
+    checkpoint = load_checkpoint(args.checkpoint_file)
+    reconcile_results: List[Dict[str, Any]] = []
+    reconcile_tracker: List[Dict[str, Any]] = []
+    reconcile_stats: Optional[Stats] = None
+
+    if checkpoint and checkpoint.get("results_log"):
+        reconcile_results = list(checkpoint["results_log"])
+        logger.info("Using %d result row(s) from checkpoint", len(reconcile_results))
+        if checkpoint.get("queued_files_tracker"):
+            reconcile_tracker = list(checkpoint["queued_files_tracker"])
+            logger.info("Using %d tracked file(s) from checkpoint", len(reconcile_tracker))
+        if checkpoint.get("stats"):
+            reconcile_stats = Stats()
+            reconcile_stats.total_processed = checkpoint["stats"].get("total_processed", 0)
+            reconcile_stats.successful = checkpoint["stats"].get("successful", 0)
+            reconcile_stats.failed = checkpoint["stats"].get("failed", 0)
+            reconcile_stats.enqueued_files = checkpoint["stats"].get("enqueued_files", 0)
+
+    if args.reconcile_from_csv:
+        reconcile_results = load_results_log_from_csv(args.reconcile_from_csv)
+    else:
+        matched_csv = find_matching_results_csv(log_dir, CSV_FILE)
+        if matched_csv:
+            reconcile_results = load_results_log_from_csv(matched_csv)
+        elif not reconcile_results:
+            results_path = find_most_recent_results_csv(log_dir)
+            if results_path:
+                reconcile_results = load_results_log_from_csv(results_path)
+
+    if args.reconcile_log:
+        reconcile_tracker = rebuild_tracker_from_import_log(args.reconcile_log)
+    elif not reconcile_tracker:
+        reconcile_tracker = load_tracker_from_newest_import_log(log_dir)
+
+    queued_files_tracker.clear()
+    queued_files_tracker.extend(reconcile_tracker)
+
+    settle = args.download_settle_seconds
+    if args.reconcile_downloads and settle == DEFAULT_DOWNLOAD_SETTLE_SECONDS:
+        settle = 0.0
+        logger.info("Reconcile-only mode: skipping settle wait (use --download-settle-seconds to wait)")
+
+    await reconcile_downloads_only(
+        results_log=reconcile_results,
+        queued_files_tracker=queued_files_tracker,
+        csv_file=CSV_FILE,
+        log_dir=log_dir,
+        checkpoint_file=args.checkpoint_file,
+        settle_seconds=settle,
+        stats=reconcile_stats,
+        write_pending_csv=not args.skip_pending_csv,
+        pending_csv_path=args.pending_csv,
+    )
 
 
 async def main():
@@ -230,6 +318,53 @@ async def main():
                         help="Use broader search (Artist-Track) with album preference and quality filtering")
     parser.add_argument("--queue-limit", type=int, default=QUEUE_LIMIT,
                         help="Maximum items in queue per user (0 for no limit, default: 0)")
+    parser.add_argument(
+        "--download-settle-seconds",
+        type=float,
+        default=DEFAULT_DOWNLOAD_SETTLE_SECONDS,
+        help=(
+            "Seconds to wait after the queue CSV is processed before polling SLSKD "
+            f"for download completion (default: {DEFAULT_DOWNLOAD_SETTLE_SECONDS})"
+        ),
+    )
+    parser.add_argument(
+        "--skip-download-reconcile",
+        action="store_true",
+        help="Skip post-run settle wait and download reconciliation (enqueue-only, legacy behavior)",
+    )
+    parser.add_argument(
+        "--reconcile-downloads",
+        action="store_true",
+        help="Re-poll SLSKD and update download statuses from a past run (no CSV processing)",
+    )
+    parser.add_argument(
+        "--reconcile-from-csv",
+        metavar="PATH",
+        default=None,
+        help="Results CSV for --reconcile-downloads (default: newest in output dir)",
+    )
+    parser.add_argument(
+        "--reconcile-log",
+        metavar="PATH",
+        default=None,
+        help="Import log with enqueue lines for --reconcile-downloads (default: newest in output dir)",
+    )
+    parser.add_argument(
+        "--checkpoint-file",
+        default=CHECKPOINT_FILE,
+        help=f"Checkpoint pickle path (default: {CHECKPOINT_FILE})",
+    )
+    parser.add_argument(
+        "--skip-pending-csv",
+        action="store_true",
+        help="Do not write a pending retry queue CSV after the run",
+    )
+    parser.add_argument(
+        "--pending-csv",
+        metavar="PATH",
+        default=None,
+        help="Pending retry queue path (default: <input-stem>_pending.csv beside input)",
+    )
     args = parser.parse_args()
     
     # Setup logging based on debug flag (also creates output dir and sets log_dir)
@@ -288,10 +423,14 @@ async def main():
     
     if USE_DIRECT_API:
         logger.info("Direct API mode enabled - bypassing client library")
-    
+
+    if args.reconcile_downloads:
+        await _run_reconcile_downloads_mode(args)
+        return
+
     # Check if user just wants to generate a report
     if args.gen_report:
-        checkpoint = load_checkpoint(CHECKPOINT_FILE)
+        checkpoint = load_checkpoint(args.checkpoint_file)
         if checkpoint and 'results_log' in checkpoint:
             results_log = checkpoint['results_log']
             logger.info(f"Loaded {len(results_log)} entries from checkpoint for report generation")
@@ -304,15 +443,17 @@ async def main():
     # Process with or without resuming
     start_row = 0
     if args.resume and not args.retry_failed:
-        checkpoint = load_checkpoint(CHECKPOINT_FILE)
+        checkpoint = load_checkpoint(args.checkpoint_file)
         if checkpoint:
-            start_row = checkpoint['row_index']
-            # Use the globals already declared at the beginning
+            start_row = checkpoint_resume_row(checkpoint)
             stats.total_processed = checkpoint['stats']['total_processed']
             stats.successful = checkpoint['stats']['successful']
             stats.failed = checkpoint['stats']['failed']
             stats.enqueued_files = checkpoint['stats']['enqueued_files']
             results_log = checkpoint['results_log']
+            if checkpoint.get("queued_files_tracker"):
+                queued_files_tracker.clear()
+                queued_files_tracker.extend(checkpoint["queued_files_tracker"])
 
     configure_worker_context(
         results_log=results_log,
@@ -320,8 +461,12 @@ async def main():
         log_dir=log_dir,
         csv_file=CSV_FILE,
         batch_size=BATCH_SIZE,
-        checkpoint_file=CHECKPOINT_FILE,
+        checkpoint_file=args.checkpoint_file,
         album_preferred_search=ALBUM_PREFERRED_SEARCH,
+        download_settle_seconds=args.download_settle_seconds,
+        skip_download_reconcile=args.skip_download_reconcile,
+        write_pending_csv=not args.skip_pending_csv,
+        pending_csv_path=args.pending_csv,
     )
 
     try:
