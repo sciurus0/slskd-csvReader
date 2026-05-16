@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import os
 import pickle
+import re
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
@@ -109,28 +110,44 @@ def count_csv_rows(file_path: str) -> int:
         return 0
 
 
+_CANDIDATE_LOG_RE = re.compile(
+    r"Found available candidate: (.+?) from (\S+) \(queue count:"
+)
+
+
 def save_checkpoint(
     checkpoint_file: str,
-    row_index: int,
+    next_row_index: int,
     total_rows: int,
     stats: Any,
     results_log: List[Dict[str, Any]],
+    queued_files_tracker: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """
     Save progress to a checkpoint file for resuming later.
+
+    ``next_row_index`` is the next CSV row to process on resume (0-based).
     """
     checkpoint_data: Dict[str, Any] = {
-        "row_index": row_index,
+        "next_row_index": next_row_index,
+        "row_index": max(0, next_row_index - 1),
         "total_rows": total_rows,
         "timestamp": datetime.now().isoformat(),
         "stats": stats.to_dict(),
         "results_log": results_log,
     }
+    if queued_files_tracker is not None:
+        checkpoint_data["queued_files_tracker"] = queued_files_tracker
 
     try:
         with open(checkpoint_file, "wb") as f:
             pickle.dump(checkpoint_data, f)
-        logger.info(f"Checkpoint saved at row {row_index}/{total_rows}")
+        logger.info(
+            "Checkpoint saved (next row %s/%s, %d tracked file(s))",
+            next_row_index,
+            total_rows,
+            len(queued_files_tracker or []),
+        )
     except Exception as e:
         logger.error(f"Error saving checkpoint: {e}")
 
@@ -146,9 +163,13 @@ def load_checkpoint(checkpoint_file: str) -> Optional[Dict[str, Any]]:
         if os.path.exists(checkpoint_file):
             with open(checkpoint_file, "rb") as f:
                 checkpoint_data = pickle.load(f)
+            next_row = checkpoint_data.get("next_row_index")
+            if next_row is None:
+                next_row = int(checkpoint_data.get("row_index", -1)) + 1
             logger.info(
-                f"Checkpoint loaded: row {checkpoint_data['row_index']}/"
-                f"{checkpoint_data['total_rows']}"
+                "Checkpoint loaded: resume at row %s/%s",
+                next_row,
+                checkpoint_data["total_rows"],
             )
             return checkpoint_data
         logger.info("No checkpoint file found")
@@ -290,6 +311,123 @@ def generate_report_on_demand(
         logger.info("Report generation completed successfully.")
     else:
         logger.error("Failed to generate reports.")
+
+
+def find_most_recent_import_log(log_dir: str) -> Optional[str]:
+    """Find the newest slskd_import_*.log file in the output directory."""
+    try:
+        candidates: List[Tuple[str, float]] = []
+        for filename in os.listdir(log_dir):
+            if filename.startswith("slskd_import_") and filename.endswith(".log"):
+                file_path = os.path.join(log_dir, filename)
+                candidates.append((file_path, os.path.getmtime(file_path)))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        newest = candidates[0][0]
+        logger.info("Found most recent import log: %s", newest)
+        return newest
+    except OSError as e:
+        logger.error("Error finding import log in %s: %s", log_dir, e)
+        return None
+
+
+def load_tracker_from_newest_import_log(log_dir: str) -> List[Dict[str, Any]]:
+    """Rebuild tracker from the newest import log that has enqueue candidate lines."""
+    try:
+        candidates: List[Tuple[str, float]] = []
+        for filename in os.listdir(log_dir):
+            if filename.startswith("slskd_import_") and filename.endswith(".log"):
+                file_path = os.path.join(log_dir, filename)
+                candidates.append((file_path, os.path.getmtime(file_path)))
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        for file_path, _mtime in candidates:
+            tracker = rebuild_tracker_from_import_log(file_path)
+            if tracker:
+                return tracker
+        return []
+    except OSError as e:
+        logger.error("Error finding import log in %s: %s", log_dir, e)
+        return []
+
+
+def find_matching_results_csv(log_dir: str, csv_file: str) -> Optional[str]:
+    """Path to <input_stem>_results.csv beside other reports, if it exists."""
+    base, ext = os.path.splitext(os.path.basename(csv_file))
+    path = os.path.join(log_dir, f"{base}_results{ext}")
+    if os.path.isfile(path):
+        logger.info("Found input-matched results CSV: %s", path)
+        return path
+    return None
+
+
+def rebuild_tracker_from_import_log(log_path: str) -> List[Dict[str, Any]]:
+    """
+    Rebuild queued_files_tracker entries from enqueue lines in an import log.
+
+    Expects lines like: Found available candidate: <path> from <user> (queue count: N)
+    """
+    tracker: List[Dict[str, Any]] = []
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                match = _CANDIDATE_LOG_RE.search(line)
+                if not match:
+                    continue
+                filename = match.group(1)
+                username = match.group(2)
+                tracker.append(
+                    {
+                        "username": username,
+                        "filename": filename,
+                        "basename": os.path.basename(filename.replace("\\", "/")),
+                        "download_status": "queued",
+                        "row_index": len(tracker),
+                    }
+                )
+    except OSError as e:
+        logger.error("Could not read import log %s: %s", log_path, e)
+        return []
+
+    if tracker:
+        logger.info("Rebuilt %d tracked file(s) from %s", len(tracker), log_path)
+    return tracker
+
+
+def load_results_log_from_csv(results_csv: str) -> List[Dict[str, Any]]:
+    """Load a prior results CSV into results_log dicts (UTF-8 / BOM)."""
+    results_log: List[Dict[str, Any]] = []
+    try:
+        text = decode_pipeline_text(Path(results_csv).read_bytes())
+        reader = csv.DictReader(StringIO(text))
+        for i, row in enumerate(reader):
+            entry = dict(row)
+            raw_queued = entry.get("files_queued", "")
+            try:
+                entry["files_queued"] = int(raw_queued) if str(raw_queued).strip() else 0
+            except (TypeError, ValueError):
+                entry["files_queued"] = 0
+            if entry.get("row_index") not in (None, ""):
+                entry["row_index"] = int(entry["row_index"])
+            else:
+                entry["row_index"] = i
+            for flag in ("fallback_used", "has_album_match"):
+                if flag in entry and isinstance(entry[flag], str):
+                    entry[flag] = entry[flag].lower() in ("true", "1", "yes")
+            results_log.append(entry)
+        logger.info("Loaded %d row(s) from results CSV: %s", len(results_log), results_csv)
+    except UnicodeDecodeError:
+        logger.error("Results CSV must be UTF-8 (optional BOM): %s", results_csv)
+    except OSError as e:
+        logger.error("Could not read results CSV %s: %s", results_csv, e)
+    return results_log
+
+
+def checkpoint_resume_row(checkpoint: Dict[str, Any]) -> int:
+    """Return the 0-based row index to resume from a checkpoint."""
+    if "next_row_index" in checkpoint:
+        return int(checkpoint["next_row_index"])
+    return int(checkpoint.get("row_index", -1)) + 1
 
 
 def find_most_recent_results_csv(log_dir: str) -> Optional[str]:
