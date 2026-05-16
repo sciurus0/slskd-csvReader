@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Export a Spotify playlist to a CSV compatible with slskd-spotify.py (columns: artist, album, track).
+Export a Spotify playlist to a UTF-8 CSV. Core columns (artist, album, track) feed merge_queue.py;
+additional columns capture API metadata for future matching/dedup (ignored by merge until wired).
 
 Authentication — OAuth 2.0 with PKCE (Authorization Code) + refresh token cache.
 
@@ -47,6 +48,7 @@ Usage:
     python3 spotify_playlist_fetch.py --list 1
     python3 spotify_playlist_fetch.py --list-playlists --list-limit 1
     python3 spotify_playlist_fetch.py --pick 3 -o my_export.csv
+    python3 spotify_playlist_fetch.py --pick 1,4,7
     python3 spotify_playlist_fetch.py --login-only
     SPOTIFY_DEBUG=1 python3 spotify_playlist_fetch.py --list 1
 
@@ -88,13 +90,25 @@ import requests
 
 from slskd_config import load_api_txt
 from slskd_csv import atomic_write_pipeline_csv
-from slskd_sanitize import sanitize_queue_field
 
 ACCOUNTS_AUTHORIZE_URL = "https://accounts.spotify.com/authorize"
 ACCOUNTS_TOKEN_URL = "https://accounts.spotify.com/api/token"
 API_BASE = "https://api.spotify.com/v1"
 # GET /playlists/{id}/items — max limit 50; use "item" on each row (legacy "track" is deprecated).
 PLAYLIST_ITEMS_PAGE_LIMIT = 50
+
+# Locked export schema (wide capture). merge_queue.py uses artist/album/track only.
+EXPORT_CSV_COLUMNS: Tuple[str, ...] = (
+    "artist",
+    "album",
+    "track",
+    "duration_ms",
+    "spotify_track_id",
+    "disc_number",
+    "track_number",
+    "added_at",
+    "is_unavailable",
+)
 
 DEFAULT_REDIRECT_URI = "http://127.0.0.1:8765/callback"
 DEFAULT_TOKEN_CACHE = Path.home() / ".config" / "slskd" / "spotify_tokens.json"
@@ -226,6 +240,27 @@ def _tracks_total_from_summary_playlist(pl: Dict[str, Any]) -> Optional[int]:
     if isinstance(tw, dict):
         return _safe_non_negative_int(tw.get("total"))
     return None
+
+
+def parse_pick_indices(raw: str) -> List[int]:
+    """Parse --pick value: one index or comma-separated 1-based indices (e.g. 3 or 1,4,7)."""
+    s = (raw or "").strip()
+    if not s:
+        _die("--pick requires at least one playlist number.")
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    if not parts:
+        _die("--pick requires at least one playlist number.")
+    indices: List[int] = []
+    for part in parts:
+        try:
+            n = int(part)
+        except ValueError:
+            _die(f"Invalid --pick index {part!r} (use integers, e.g. 1 or 1,4,7).")
+        if n < 1:
+            _die(f"--pick index must be >= 1, got {n}.")
+        indices.append(n)
+    # Preserve order; drop duplicate indices (same playlist exported once).
+    return list(dict.fromkeys(indices))
 
 
 def parse_playlist_id(raw: str) -> str:
@@ -503,18 +538,36 @@ def ensure_user_access_token(
     return token_payload["access_token"]
 
 
-def playlist_item_to_row(item: Dict[str, Any]) -> Tuple[str, str, str]:
+def _export_int_field(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    try:
+        return str(int(value))
+    except (TypeError, ValueError):
+        return ""
+
+
+def _empty_export_row(*, added_at: str = "", is_unavailable: str = "true") -> Dict[str, str]:
+    return {col: "" for col in EXPORT_CSV_COLUMNS} | {
+        "added_at": added_at,
+        "is_unavailable": is_unavailable,
+    }
+
+
+def playlist_item_to_row(item: Dict[str, Any]) -> Dict[str, str]:
     """
-    Map one playlist item to (artist, album, track). Always returns a row — no filtering
-    on playability, region, or local vs streaming. Missing/unavailable tracks export as
-    empty strings.
+    Map one playlist item to an export row (EXPORT_CSV_COLUMNS).
+
+    Always returns a row for non-episode items — no playability/market filter.
+    Missing or removed tracks keep artist/album/track empty with is_unavailable=true.
 
     Accepts PlaylistTrackObject from GET /playlists/{id}/items: primary field is ``item``;
-    legacy ``track`` is still recognized.
+    legacy ``track`` is still recognized. ``added_at`` comes from the playlist item envelope.
     """
+    added_at = (item.get("added_at") or "").strip()
     tr = item.get("item") or item.get("track")
     if tr is None:
-        return ("", "", "")
+        return _empty_export_row(added_at=added_at, is_unavailable="true")
 
     artists = tr.get("artists") or []
     names = [a.get("name", "").strip() for a in artists if a.get("name")]
@@ -523,12 +576,26 @@ def playlist_item_to_row(item: Dict[str, Any]) -> Tuple[str, str, str]:
     album_obj = tr.get("album") or {}
     album = (album_obj.get("name") or "").strip()
     title = (tr.get("name") or "").strip()
-    return (artist, album, title)
+
+    is_playable = tr.get("is_playable")
+    is_unavailable = "true" if is_playable is False else "false"
+
+    return {
+        "artist": artist,
+        "album": album,
+        "track": title,
+        "duration_ms": _export_int_field(tr.get("duration_ms")),
+        "spotify_track_id": (tr.get("id") or "").strip(),
+        "disc_number": _export_int_field(tr.get("disc_number")),
+        "track_number": _export_int_field(tr.get("track_number")),
+        "added_at": added_at,
+        "is_unavailable": is_unavailable,
+    }
 
 
-def fetch_playlist_track_rows(token: str, playlist_id: str) -> List[Tuple[str, str, str]]:
+def fetch_playlist_track_rows(token: str, playlist_id: str) -> List[Dict[str, str]]:
     """Fetch every playlist item row (paginated). One CSV row per API item, no market filter."""
-    rows: List[Tuple[str, str, str]] = []
+    rows: List[Dict[str, str]] = []
     url = f"{API_BASE}/playlists/{playlist_id}/items"
     params: Dict[str, Any] = {"limit": PLAYLIST_ITEMS_PAGE_LIMIT}
     start_ts = time.time()
@@ -680,18 +747,12 @@ def print_user_playlists(playlists: List[Dict[str, Any]]) -> None:
         print(f"{i:3}  {owner:<16}  {oid:<24}  {name}")
 
 
-def write_csv(path: str, rows: Iterable[Tuple[str, str, str]]) -> None:
-    atomic_write_pipeline_csv(
-        path,
-        [
-            {
-                "artist": sanitize_queue_field(a),
-                "album": sanitize_queue_field(b),
-                "track": sanitize_queue_field(c),
-            }
-            for a, b, c in rows
-        ],
-    )
+def write_csv(path: str, rows: Iterable[Dict[str, str]]) -> None:
+    """Write export CSV (raw API fields). Sanitization happens in merge_queue.py only."""
+    normalized: List[Dict[str, str]] = []
+    for row in rows:
+        normalized.append({col: (row.get(col) or "") for col in EXPORT_CSV_COLUMNS})
+    atomic_write_pipeline_csv(path, normalized, fieldnames=EXPORT_CSV_COLUMNS)
 
 
 def main() -> None:
@@ -743,10 +804,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--pick",
-        type=int,
-        metavar="N",
+        metavar="N[,N...]",
         default=None,
-        help="Export playlist number N (1-based; same order as --list-playlists)",
+        help="Export playlist(s) by 1-based index (same order as --list-playlists). "
+        "Examples: --pick 3 or --pick 1,4,7 (combined into one output CSV)",
     )
     parser.add_argument(
         "--token-cache",
@@ -854,23 +915,39 @@ def main() -> None:
         return
 
     if args.pick is not None:
-        if args.pick < 1:
-            _die("--pick N requires N >= 1")
-        playlists = fetch_user_playlists(access_token, max_playlists=args.pick)
-        if args.pick > len(playlists):
-            _die(f"--pick {args.pick} is out of range (you have {len(playlists)} playlists).")
-        playlist_id = playlists[args.pick - 1]["id"]
+        pick_indices = parse_pick_indices(args.pick)
+        max_index = max(pick_indices)
+        playlists = fetch_user_playlists(access_token, max_playlists=max_index)
+        if max_index > len(playlists):
+            _die(
+                f"--pick {max_index} is out of range (you have {len(playlists)} playlists in this listing)."
+            )
+        all_rows: List[Dict[str, str]] = []
+        for idx in pick_indices:
+            pl = playlists[idx - 1]
+            playlist_id = pl["id"]
+            if not playlist_id:
+                _die(f"Playlist #{idx} has no id; cannot export.")
+            label = pl.get("name") or playlist_id
+            rows = fetch_playlist_track_rows(access_token, playlist_id)
+            print(f"Playlist #{idx} ({label}): {len(rows)} rows", file=sys.stderr)
+            all_rows.extend(rows)
+        if not all_rows:
+            print(
+                "Warning: no tracks exported (empty playlist(s) or no readable tracks).",
+                file=sys.stderr,
+            )
+        write_csv(args.output, all_rows)
+        print(f"Wrote {len(all_rows)} rows to {args.output}")
     elif args.playlist:
         playlist_id = parse_playlist_id(args.playlist)
+        rows = fetch_playlist_track_rows(access_token, playlist_id)
+        if not rows:
+            print("Warning: no tracks exported (empty playlist or no readable tracks).", file=sys.stderr)
+        write_csv(args.output, rows)
+        print(f"Wrote {len(rows)} rows to {args.output}")
     else:
         _die("playlist URL/ID, or --pick N, is required unless --login-only or --list-playlists is set.")
-
-    rows = fetch_playlist_track_rows(access_token, playlist_id)
-    if not rows:
-        print("Warning: no tracks exported (empty playlist or no readable tracks).", file=sys.stderr)
-
-    write_csv(args.output, rows)
-    print(f"Wrote {len(rows)} rows to {args.output}")
 
 
 if __name__ == "__main__":
