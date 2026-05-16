@@ -2,8 +2,10 @@
 .DS_Store
 /checkpoint.pkl
 /logs
-/to_queue.csv
 /api.txt
+
+# CSV pipeline data (exports, queues, reports — not tracked)
+*.csv
 
 # Python bytecode (keep repo to source only)
 __pycache__/
