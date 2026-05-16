@@ -97,7 +97,8 @@ API_BASE = "https://api.spotify.com/v1"
 # GET /playlists/{id}/items — max limit 50; use "item" on each row (legacy "track" is deprecated).
 PLAYLIST_ITEMS_PAGE_LIMIT = 50
 
-# Locked export schema (wide capture). merge_queue.py uses artist/album/track only.
+# Locked export schema (wide capture). merge_queue.py stores artist/album/track + duration_ms,
+# spotify_track_id, is_unavailable on to_queue.csv.
 EXPORT_CSV_COLUMNS: Tuple[str, ...] = (
     "artist",
     "album",
