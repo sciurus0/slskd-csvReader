@@ -159,31 +159,29 @@ def format_pipeline_plan(
     force_full_import: bool,
     continue_on_export_error: bool = False,
 ) -> List[str]:
-    lines = [
-        "Pipeline plan",
-        f"  workspace: {workspace}",
-    ]
-    if dry_run:
-        lines.append(
-            "  mode: dry-run (export is written; merge previews counts only)"
-        )
-    if continue_on_export_error:
-        lines.append(
-            "  export: --continue-on-export-error (skip failed playlists)"
-        )
-    if force_full_import:
-        lines.append("  merge: --force-full-import (ignore added_at watermarks)")
+    """Compact one-line plan plus optional modifier notes."""
+    flow: List[str] = []
     for stage in stages:
         if stage.action is StageAction.SKIP:
-            action = "skip"
-        elif stage.action is StageAction.PREVIEW:
-            action = "preview (no writes)"
-        else:
-            action = "run"
-        line = f"  [{stage.key}] {stage.title}: {action}"
-        if stage.writes:
-            line += f" → writes {', '.join(stage.writes)}"
-        lines.append(line)
+            continue
+        label = stage.key
+        if stage.action is StageAction.PREVIEW:
+            label += " (preview)"
+        elif "resume" in stage.title.lower():
+            label += "+resume"
+        flow.append(label)
+    lines = [
+        f"Pipeline ({workspace}): {' → '.join(flow) if flow else 'none'}",
+    ]
+    mods: List[str] = []
+    if dry_run:
+        mods.append("dry-run")
+    if continue_on_export_error:
+        mods.append("continue-on-export-error")
+    if force_full_import:
+        mods.append("force-full-import")
+    if mods:
+        lines.append(f"  options: {', '.join(mods)}")
     return lines
 
 
@@ -369,7 +367,6 @@ def build_slskd_argv(
     resume: bool,
     checkpoint_path: Path,
     download_settle_seconds: Optional[float],
-    skip_download_reconcile: bool,
     skip_pending_csv: bool,
     trim_queue: bool,
 ) -> List[str]:
@@ -385,8 +382,6 @@ def build_slskd_argv(
         args.append("--resume")
     if download_settle_seconds is not None:
         args.extend(["--download-settle-seconds", str(download_settle_seconds)])
-    if skip_download_reconcile:
-        args.append("--skip-download-reconcile")
     if skip_pending_csv:
         args.append("--skip-pending-csv")
     if trim_queue:
@@ -473,11 +468,6 @@ def main() -> None:
         type=float,
         default=None,
         help="Passed to slskd_spotify.py (default: slskd default)",
-    )
-    parser.add_argument(
-        "--skip-download-reconcile",
-        action="store_true",
-        help="[legacy] Passed to slskd_spotify.py (enqueue-only; avoid)",
     )
     parser.add_argument(
         "--skip-pending-csv",
@@ -580,7 +570,6 @@ def main() -> None:
             resume=args.resume,
             checkpoint_path=checkpoint_path,
             download_settle_seconds=args.download_settle_seconds,
-            skip_download_reconcile=args.skip_download_reconcile,
             skip_pending_csv=args.skip_pending_csv,
             trim_queue=args.trim_queue,
         )
@@ -730,7 +719,6 @@ def main() -> None:
         resume=False,
         checkpoint_path=checkpoint_path,
         download_settle_seconds=args.download_settle_seconds,
-        skip_download_reconcile=args.skip_download_reconcile,
         skip_pending_csv=args.skip_pending_csv,
         trim_queue=args.trim_queue,
     )

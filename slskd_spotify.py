@@ -43,9 +43,6 @@ from slskd_config import (
     EXCLUDED_EXTENSIONS,
     CIRCUIT_BREAKER_THRESHOLD,
     CIRCUIT_BREAKER_TIMEOUT,
-    USE_DIRECT_API,
-    EXACT_MATCH,
-    ALBUM_PREFERRED_SEARCH,
     ALLOWED_FORMATS,
     POLL_INTERVAL,
     MAX_POLLS,
@@ -168,12 +165,6 @@ def _build_argument_parser() -> argparse.ArgumentParser:
             f"(default: {DEFAULT_DOWNLOAD_SETTLE_SECONDS})"
         ),
     )
-    tuning.add_argument(
-        "--cleanup-ephemeral-csv",
-        action="store_true",
-        help="Remove ephemeral pending CSVs in workspace (or use pipeline_cleanup.py)",
-    )
-
     recovery = parser.add_argument_group("recovery (past runs)")
     recovery.add_argument(
         "--reconcile-downloads",
@@ -204,47 +195,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Retry rows that failed in the newest results CSV",
     )
 
-    legacy = parser.add_argument_group("legacy (deprecated — avoid)")
-    legacy.add_argument(
-        "--skip-download-reconcile",
-        action="store_true",
-        help="[legacy] Enqueue-only; skip post-run download reconciliation",
-    )
-    legacy.add_argument(
-        "--direct-api",
-        action="store_true",
-        help="[legacy] HTTP API instead of slskd client library",
-    )
-    legacy.add_argument(
-        "--exact-match",
-        action="store_true",
-        help="[legacy] Exact path match; default ranking uses SRCH-02 normalization",
-    )
-    legacy.add_argument(
-        "--album-preferred-search",
-        action="store_true",
-        help="[legacy] Old album-preference mode; superseded by SRCH-02/03 query flow",
-    )
     return parser
-
-
-def _warn_legacy_flags(args: argparse.Namespace) -> None:
-    """Log when deprecated CLI flags are used (see docs/DEV_OPS.md)."""
-    flagged = []
-    if args.skip_download_reconcile:
-        flagged.append("--skip-download-reconcile")
-    if args.direct_api:
-        flagged.append("--direct-api")
-    if args.exact_match:
-        flagged.append("--exact-match")
-    if args.album_preferred_search:
-        flagged.append("--album-preferred-search")
-    if flagged:
-        logger.warning(
-            "Legacy flag(s): %s — prefer default reconciliation and SRCH-02/03 ranking. "
-            "See docs/DEV_OPS.md.",
-            ", ".join(flagged),
-        )
 
 
 async def _run_reconcile_downloads_mode(args: argparse.Namespace) -> None:
@@ -309,27 +260,20 @@ async def main():
     # Declare globals at the beginning of the function
     global CSV_FILE, BATCH_SIZE, RATE_LIMIT_DELAY, stats, results_log, log_dir
     global EXCLUDED_EXTENSIONS, ALLOWED_FORMATS, QUEUE_LIMIT
-    global USE_DIRECT_API, EXACT_MATCH, ALBUM_PREFERRED_SEARCH
-    
+
     parser = _build_argument_parser()
     args = parser.parse_args()
 
     log_level = logging.DEBUG if args.debug else logging.INFO
     _, log_dir = setup_logging(log_level, args.output_dir)
-    _warn_legacy_flags(args)
-    
-    # Update global configuration based on arguments
+
     CSV_FILE = args.csv
     BATCH_SIZE = args.batch_size
     RATE_LIMIT_DELAY = args.delay
     ALLOWED_FORMATS = args.formats
     EXCLUDED_EXTENSIONS = args.exclude
-    USE_DIRECT_API = args.direct_api
-    EXACT_MATCH = args.exact_match
-    ALBUM_PREFERRED_SEARCH = args.album_preferred_search
     QUEUE_LIMIT = args.queue_limit
 
-    # Configure search/ranking module with runtime overrides
     configure_search_context(
         host=HOST,
         api_path=API_PATH,
@@ -341,8 +285,6 @@ async def main():
         max_polls=MAX_POLLS,
         circuit_breaker_threshold=CIRCUIT_BREAKER_THRESHOLD,
         circuit_breaker_timeout=CIRCUIT_BREAKER_TIMEOUT,
-        album_preferred_search=ALBUM_PREFERRED_SEARCH,
-        exact_match=EXACT_MATCH,
         excluded_extensions=EXCLUDED_EXTENSIONS,
         allowed_formats=ALLOWED_FORMATS,
     )
@@ -353,23 +295,13 @@ async def main():
         api_key=API_KEY,
         headers=HEADERS,
         enqueue_timeout=ENQUEUE_TIMEOUT,
-        use_direct_api=USE_DIRECT_API,
         queue_limit=QUEUE_LIMIT,
         queued_files_tracker=queued_files_tracker,
         stats=stats,
     )
-    
-    if EXACT_MATCH:
-        logger.info("Exact matching mode enabled - only exact artist-album-track matches will be selected")
-    
-    if ALBUM_PREFERRED_SEARCH:
-        logger.info("Album-preferred search mode enabled - broader search with album preference and quality filtering")
-    
+
     logger.info(f"Allowed formats (in priority order): {ALLOWED_FORMATS}")
     logger.info(f"Excluded formats: {EXCLUDED_EXTENSIONS}")
-    
-    if USE_DIRECT_API:
-        logger.info("Direct API mode enabled - bypassing client library")
 
     if args.reconcile_downloads:
         await _run_reconcile_downloads_mode(args)
@@ -409,13 +341,10 @@ async def main():
         csv_file=CSV_FILE,
         batch_size=BATCH_SIZE,
         checkpoint_file=args.checkpoint_file,
-        album_preferred_search=ALBUM_PREFERRED_SEARCH,
         download_settle_seconds=args.download_settle_seconds,
-        skip_download_reconcile=args.skip_download_reconcile,
         write_pending_csv=not args.skip_pending_csv,
         pending_csv_path=args.pending_csv,
         trim_queue_after_run=args.trim_queue,
-        cleanup_ephemeral_pending=args.cleanup_ephemeral_csv,
     )
 
     try:

@@ -1,8 +1,10 @@
 """
 CSV and reporting utilities for the slskd_spotify workflow.
 
-This module centralizes CSV encoding detection, row counting, checkpointing,
-and report generation so they can be reused independently of the main script.
+Golden path: UTF-8 pipeline read/write, checkpoints, run reports, pending retry CSV.
+
+Recovery helpers (not golden path): rebuild trackers and reload results from
+``data/logs/`` import logs for ``slskd_spotify.py --reconcile-downloads``.
 """
 
 from __future__ import annotations

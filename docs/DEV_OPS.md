@@ -12,15 +12,12 @@ Use these daily; ignore the rest unless you have a specific recovery or tuning n
 | --- | --- | --- |
 | **Golden** | End-to-end or queue processing | `run_pipeline.py --pick … -y`, `--resume -y`, `slskd_spotify.py --trim-queue`, `merge_queue.py` |
 | **Tuning** | Rate, formats, debug | `slskd_spotify.py --delay`, `--formats`, `--batch-size`, `--download-settle-seconds` |
-| **Hygiene** | Same behavior as flags on slskd | `trim_queue.py`, `pipeline_cleanup.py --ephemeral` |
+| **Hygiene** | Trim queue or drop ephemeral CSVs | `trim_queue.py`, `pipeline_cleanup.py --ephemeral` |
 | **Recovery** | Fix a past run without re-searching | `slskd_spotify.py --reconcile-downloads`, `--gen-report`, `--retry-failed` |
-| **Legacy** | Pre–SRCH-02 / enqueue-only; avoid | `--skip-download-reconcile`, `--direct-api`, `--exact-match`, `--album-preferred-search` |
 
-`slskd_spotify.py --help` groups flags the same way. Legacy flags still work but log a deprecation warning.
+`slskd_spotify.py --help` groups flags: golden path, tuning, recovery.
 
-### CLI audit (local logs)
-
-Under `data/logs/`, recent import runs use the **default** path: reconciliation on, normalized SRCH-02/03 ranking, no `--album-preferred-search`, `--exact-match`, `--direct-api`, or `--retry-failed`. Treat legacy flags as unused unless you know you need them.
+Validate-input runs still auto-remove `to_queue_pending_validate.csv` after each slskd run. For other pending files, use `pipeline_cleanup.py`.
 
 ## One queue
 
@@ -103,8 +100,8 @@ python3 pipeline_cleanup.py --ephemeral      # validate + retry pending
 If `data/success_ledger.csv` predates NORM-06 (no `artist_primary` column), rewrite once:
 
 ```bash
-python3 backfill_ledger.py --dry-run
-python3 backfill_ledger.py
+python3 scripts/backfill_ledger.py --dry-run
+python3 scripts/backfill_ledger.py
 ```
 
 Otherwise the column appears automatically the next time slskd appends successes.
