@@ -52,7 +52,8 @@ Usage:
     python3 spotify_playlist_fetch.py --login-only
     SPOTIFY_DEBUG=1 python3 spotify_playlist_fetch.py --list 1
 
-Exports one CSV row per music track (including removed tracks, local files). Podcast episodes are omitted.
+Exports one CSV row per music track (including removed / unplayable tracks; ``is_unavailable``
+may be set). Podcast episodes are the **only** playlist items omitted (NORM-05).
 No market/availability filter. Playlist listing shows track counts only when the API includes them (? otherwise).
 
 Throttle/stall protections:
@@ -632,6 +633,7 @@ def fetch_playlist_track_rows(token: str, playlist_id: str) -> List[Dict[str, st
         )
         for item in payload.get("items") or []:
             tr = item.get("item") or item.get("track")
+            # NORM-05: episodes are never exported; all music tracks are kept regardless of playability.
             if tr and tr.get("type") == "episode":
                 continue
             rows.append(playlist_item_to_row(item, playlist_id=playlist_id))

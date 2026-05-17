@@ -182,6 +182,7 @@ def _load_export_rows(path: Path) -> List[Dict[str, str]]:
         artist = n.get("artist", "")
         album = n.get("album", "")
         track = n.get("track", "")
+        # NORM-05: not availability — skip empty stubs only (episodes never reach export).
         if not artist and not album and not track:
             continue
         if not artist:
