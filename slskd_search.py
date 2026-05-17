@@ -87,55 +87,62 @@ def configure_search_context(
     _allowed_formats = allowed_formats
 
 
+def _responses_from_search_payload(data: object) -> List[Dict[str, Any]]:
+    if isinstance(data, dict):
+        raw = data.get("responses") or data.get("Responses") or []
+        return raw if isinstance(raw, list) else []
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def _search_job_complete(data: Dict[str, Any]) -> bool:
+    if data.get("isComplete") is True:
+        return True
+    state = str(data.get("state") or "")
+    return "completed" in state.lower()
+
+
 async def poll_responses_async(job_id):
-    """Poll until the given search job has responses, then return them."""
-    base = f"{_host.rstrip('/')}{_api_path}/searches/{job_id}/responses"
+    """Poll search job state until complete, then return the latest response list."""
+    state_url = f"{_host.rstrip('/')}{_api_path}/searches/{job_id}"
+    latest_results: List[Dict[str, Any]] = []
 
-    got_initial_results = False
-    initial_results = []
-    extended_poll_count = 0
-    extended_poll_interval = 3.0
-    max_extended_polls = 5
+    for poll_num in range(_max_polls):
+        if poll_num > 0:
+            await asyncio.sleep(_poll_interval)
 
-    for _ in range(_max_polls + max_extended_polls):
         try:
-            if got_initial_results:
-                await asyncio.sleep(extended_poll_interval)
-                extended_poll_count += 1
-                if extended_poll_count >= max_extended_polls:
-                    return initial_results
-            else:
-                await asyncio.sleep(_poll_interval)
-
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 resp = await asyncio.get_event_loop().run_in_executor(
-                    pool, lambda: requests.get(base, headers=_headers)
+                    pool, lambda: requests.get(state_url, headers=_headers)
                 )
             resp.raise_for_status()
             data = resp.json()
-            if isinstance(data, dict):
-                results = data.get("responses") or data.get("Responses") or []
-            else:
-                results = data
+            if not isinstance(data, dict):
+                continue
 
+            results = _responses_from_search_payload(data)
             if results:
-                if not got_initial_results:
-                    logger.info(
-                        f"Got initial results ({len(results)} responses), continuing to poll for more complete results..."
-                    )
-                    got_initial_results = True
-                    initial_results = results
-                else:
-                    for new_result in results:
-                        if not any(
-                            r.get("username") == new_result.get("username")
-                            for r in initial_results
-                        ):
-                            initial_results.append(new_result)
+                latest_results = results
+
+            if _search_job_complete(data):
+                logger.info(
+                    "Search complete: %d response(s), state=%r",
+                    len(latest_results),
+                    data.get("state"),
+                )
+                return latest_results
         except Exception as e:
             logger.warning(f"Error during polling: {e}")
 
-    return initial_results if got_initial_results else []
+    if latest_results:
+        logger.info(
+            "Search poll limit reached (%d poll(s)); returning %d response(s)",
+            _max_polls,
+            len(latest_results),
+        )
+    return latest_results
 
 
 async def search_slskd_async(pattern):
