@@ -1,2 +1,5 @@
-# Used by slskd modules and spotify_playlist_fetch.py
-requests>=2.28.0
+# Runtime dependencies for slskd-csvReader (DEV/PROD scripts).
+# Python 3.10+ recommended.
+
+requests>=2.28,<3
+slskd-api>=0.1.5

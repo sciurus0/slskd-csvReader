@@ -1,8 +1,8 @@
 """
-Logging setup for slskd-spotify workflow.
+Logging setup for slskd_spotify workflow.
 
 Provides a shared logger and setup_logging() to configure file + console output
-with rotation. Used by slskd-spotify.py and related modules.
+with rotation. Used by slskd_spotify.py and related modules.
 """
 
 import logging

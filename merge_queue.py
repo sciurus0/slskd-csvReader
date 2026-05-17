@@ -11,7 +11,7 @@ Steps:
 4. Load backup rows, then append filtered Spotify export rows (existing queue first).
 5. Sanitize artist, NORM artist credits (``artist_primary`` / ``artist_alternates``), NORM-04 sanitize-only album/track; pass through
    ``duration_ms``, ``spotify_track_id``, ``is_unavailable`` when present.
-6. Dedupe with hybrid key: ``spotify_track_id`` when set, else sanitized (artist, album, track).
+6. Dedupe with hybrid key: ``spotify_track_id`` when set, else ``(artist_primary, album, track)``.
    Queue rows win; duplicate export rows are skipped.
 7. Write wide ``to_queue.csv`` as UTF-8 with BOM (atomic replace); advance watermarks.
 
@@ -28,7 +28,6 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import csv
 import shutil
 import sys
 from pathlib import Path
@@ -54,7 +53,7 @@ from slskd_workspace import (
     resolve_workspace,
 )
 
-# Wide queue contract (Track A). Extra export columns (disc_number, added_at, …) are not stored yet.
+# Wide queue contract. Extra export columns (disc_number, added_at, …) are not stored yet.
 QUEUE_CSV_COLUMNS: Tuple[str, ...] = (
     "artist",
     "artist_primary",

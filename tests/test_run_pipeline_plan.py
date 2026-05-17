@@ -78,9 +78,10 @@ class TestRunPipelinePlan(unittest.TestCase):
             force_full_import=True,
         )
         joined = "\n".join(lines)
+        self.assertIn("Pipeline", joined)
         self.assertIn("dry-run", joined)
         self.assertIn("force-full-import", joined)
-        self.assertIn("preview (no writes)", joined)
+        self.assertIn("merge (preview)", joined)
 
 
 if __name__ == "__main__":

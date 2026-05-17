@@ -1,8 +1,10 @@
 """
-CSV and reporting utilities for the slskd-spotify workflow.
+CSV and reporting utilities for the slskd_spotify workflow.
 
-This module centralizes CSV encoding detection, row counting, checkpointing,
-and report generation so they can be reused independently of the main script.
+Golden path: UTF-8 pipeline read/write, checkpoints, run reports, pending retry CSV.
+
+Recovery helpers (not golden path): rebuild trackers and reload results from
+``data/logs/`` import logs for ``slskd_spotify.py --reconcile-downloads``.
 """
 
 from __future__ import annotations
@@ -98,38 +100,6 @@ def atomic_write_pipeline_csv(
             except OSError:
                 pass
         raise
-
-
-def detect_encoding(file_path: str) -> str:
-    """
-    Return which UTF-8 variant successfully decodes the file (pipeline CSVs only).
-
-    Raises UnicodeDecodeError if the file is not valid UTF-8 with or without BOM.
-    """
-    raw = Path(file_path).read_bytes()
-    decode_pipeline_text(raw)
-    # We do not distinguish which member of PIPELINE_UTF_ENCODINGS matched without re-decoding.
-    logger.info("Decoded %s as UTF-8 (with or without BOM)", file_path)
-    return "utf-8-sig"
-
-
-def count_csv_rows(file_path: str) -> int:
-    """Count data rows (excluding header) in a UTF-8 pipeline CSV."""
-    try:
-        rows = read_pipeline_csv_rows(file_path)
-        n = len(rows)
-        logger.info("Counted %s rows in %s", n, file_path)
-        return n
-    except UnicodeDecodeError as e:
-        logger.error(
-            "CSV must be UTF-8 (optional BOM), no transcoding: %s (%s)",
-            file_path,
-            e,
-        )
-        return 0
-    except OSError as e:
-        logger.error("Could not read CSV file %s: %s", file_path, e)
-        return 0
 
 
 _CANDIDATE_LOG_RE = re.compile(

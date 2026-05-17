@@ -7,8 +7,8 @@ normalize rows, but this rewrites the full file in one shot.
 
 Usage::
 
-    python3 backfill_ledger.py --dry-run
-    python3 backfill_ledger.py --workspace data
+    python3 scripts/backfill_ledger.py --dry-run
+    python3 scripts/backfill_ledger.py --workspace data
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Interactive end-to-end pipeline: Spotify playlist pick → export → merge_queue → slskd-spotify.
+Interactive end-to-end pipeline: Spotify playlist pick → export → merge_queue → slskd_spotify.
 
 Run from the repo tree (DEV or PROD). Default data directory is ``./data/`` (see POLISH-02).
 
@@ -11,7 +11,7 @@ Examples:
     python3 run_pipeline.py --dry-run
     python3 run_pipeline.py --skip-slskd
     python3 run_pipeline.py --resume -y
-    python3 run_pipeline.py --slskd-only --csv to_queue_pending.csv -y
+    python3 run_pipeline.py --slskd-only --csv data/to_queue_pending.csv -y
     python3 run_pipeline.py --pick 1,4,7 --continue-on-export-error -y
 """
 
@@ -27,7 +27,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from slskd_config import CHECKPOINT_FILE, load_api_txt
+from slskd_config import CHECKPOINT_BASENAME, load_api_txt
 from slskd_csv import checkpoint_resume_row, load_checkpoint
 from slskd_export_paths import default_new_export_path, parse_export_date
 from slskd_workspace import (
@@ -36,6 +36,8 @@ from slskd_workspace import (
     queue_csv_path,
     resolve_workspace,
 )
+
+SLSKD_SCRIPT = "slskd_spotify.py"
 
 from spotify_playlist_fetch import (
     DEFAULT_REDIRECT_URI,
@@ -98,7 +100,7 @@ def build_pipeline_plan(
             PipelineStagePlan("merge", "merge_queue", StageAction.SKIP),
             PipelineStagePlan(
                 "slskd",
-                "slskd-spotify"
+                "slskd_spotify"
                 + (" (resume)" if resume else ""),
                 StageAction.RUN,
                 slskd_writes,
@@ -142,7 +144,7 @@ def build_pipeline_plan(
         ),
         PipelineStagePlan(
             "slskd",
-            "slskd-spotify",
+            "slskd_spotify",
             slskd_action,
             slskd_writes_full,
         ),
@@ -157,31 +159,29 @@ def format_pipeline_plan(
     force_full_import: bool,
     continue_on_export_error: bool = False,
 ) -> List[str]:
-    lines = [
-        "Pipeline plan",
-        f"  workspace: {workspace}",
-    ]
-    if dry_run:
-        lines.append(
-            "  mode: dry-run (export is written; merge previews counts only)"
-        )
-    if continue_on_export_error:
-        lines.append(
-            "  export: --continue-on-export-error (skip failed playlists)"
-        )
-    if force_full_import:
-        lines.append("  merge: --force-full-import (ignore added_at watermarks)")
+    """Compact one-line plan plus optional modifier notes."""
+    flow: List[str] = []
     for stage in stages:
         if stage.action is StageAction.SKIP:
-            action = "skip"
-        elif stage.action is StageAction.PREVIEW:
-            action = "preview (no writes)"
-        else:
-            action = "run"
-        line = f"  [{stage.key}] {stage.title}: {action}"
-        if stage.writes:
-            line += f" → writes {', '.join(stage.writes)}"
-        lines.append(line)
+            continue
+        label = stage.key
+        if stage.action is StageAction.PREVIEW:
+            label += " (preview)"
+        elif "resume" in stage.title.lower():
+            label += "+resume"
+        flow.append(label)
+    lines = [
+        f"Pipeline ({workspace}): {' → '.join(flow) if flow else 'none'}",
+    ]
+    mods: List[str] = []
+    if dry_run:
+        mods.append("dry-run")
+    if continue_on_export_error:
+        mods.append("continue-on-export-error")
+    if force_full_import:
+        mods.append("force-full-import")
+    if mods:
+        lines.append(f"  options: {', '.join(mods)}")
     return lines
 
 
@@ -336,14 +336,14 @@ def _run_python_step(
 
 
 def _checkpoint_path(workspace: Path, explicit: Optional[Path]) -> Path:
-    return (explicit or workspace / CHECKPOINT_FILE).resolve()
+    return (explicit or workspace / CHECKPOINT_BASENAME).resolve()
 
 
 def _print_resume_hint(checkpoint_path: Path) -> None:
     """Log whether a slskd checkpoint exists before resume (RUN-02)."""
     if not checkpoint_path.is_file():
         print(
-            f"No checkpoint at {checkpoint_path}; slskd-spotify will start from row 1.",
+            f"No checkpoint at {checkpoint_path}; slskd_spotify will start from row 1.",
             file=sys.stderr,
         )
         return
@@ -367,7 +367,6 @@ def build_slskd_argv(
     resume: bool,
     checkpoint_path: Path,
     download_settle_seconds: Optional[float],
-    skip_download_reconcile: bool,
     skip_pending_csv: bool,
     trim_queue: bool,
 ) -> List[str]:
@@ -383,8 +382,6 @@ def build_slskd_argv(
         args.append("--resume")
     if download_settle_seconds is not None:
         args.extend(["--download-settle-seconds", str(download_settle_seconds)])
-    if skip_download_reconcile:
-        args.append("--skip-download-reconcile")
     if skip_pending_csv:
         args.append("--skip-pending-csv")
     if trim_queue:
@@ -406,7 +403,7 @@ def confirm_slskd(*, queue_path: Path, assume_yes: bool) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Interactive Spotify → merge_queue → slskd-spotify pipeline."
+        description="Interactive Spotify → merge_queue → slskd_spotify pipeline."
     )
     parser.add_argument(
         "--workspace",
@@ -442,13 +439,13 @@ def main() -> None:
     parser.add_argument(
         "--skip-slskd",
         action="store_true",
-        help="Stop after merge_queue (do not invoke slskd-spotify.py)",
+        help="Stop after merge_queue (do not invoke slskd_spotify.py)",
     )
     parser.add_argument(
         "-y",
         "--yes",
         action="store_true",
-        help="Do not prompt before starting slskd-spotify.py",
+        help="Do not prompt before starting slskd_spotify.py",
     )
     parser.add_argument(
         "--no-browser",
@@ -470,28 +467,23 @@ def main() -> None:
         "--download-settle-seconds",
         type=float,
         default=None,
-        help="Passed to slskd-spotify.py (default: slskd default)",
-    )
-    parser.add_argument(
-        "--skip-download-reconcile",
-        action="store_true",
-        help="Passed to slskd-spotify.py",
+        help="Passed to slskd_spotify.py (default: slskd default)",
     )
     parser.add_argument(
         "--skip-pending-csv",
         action="store_true",
-        help="Passed to slskd-spotify.py",
+        help="Passed to slskd_spotify.py",
     )
     parser.add_argument(
         "--resume",
         "-r",
         action="store_true",
-        help="Skip Spotify export and merge; run slskd-spotify.py --resume from checkpoint.pkl",
+        help="Skip Spotify export and merge; run slskd_spotify.py --resume from checkpoint.pkl",
     )
     parser.add_argument(
         "--slskd-only",
         action="store_true",
-        help="Skip Spotify export and merge; run slskd-spotify.py only",
+        help="Skip Spotify export and merge; run slskd_spotify.py only",
     )
     parser.add_argument(
         "--csv",
@@ -504,12 +496,12 @@ def main() -> None:
         "--checkpoint-file",
         type=Path,
         default=None,
-        help=f"Checkpoint pickle for slskd resume (default: <workspace>/{CHECKPOINT_FILE})",
+        help=f"Checkpoint pickle for slskd resume (default: <workspace>/{CHECKPOINT_BASENAME})",
     )
     parser.add_argument(
         "--trim-queue",
         action="store_true",
-        help="Passed to slskd-spotify.py after reconciliation",
+        help="Passed to slskd_spotify.py after reconciliation",
     )
     parser.add_argument(
         "--continue-on-export-error",
@@ -567,7 +559,7 @@ def main() -> None:
         if args.resume:
             _print_resume_hint(checkpoint_path)
         if not confirm_slskd(queue_path=queue_path, assume_yes=args.yes):
-            print("Skipped slskd-spotify.py.", file=sys.stderr)
+            print("Skipped slskd_spotify.py.", file=sys.stderr)
             _print_pipeline_summary(
                 stage_seconds=stage_seconds, stopped_early="user declined slskd"
             )
@@ -578,18 +570,17 @@ def main() -> None:
             resume=args.resume,
             checkpoint_path=checkpoint_path,
             download_settle_seconds=args.download_settle_seconds,
-            skip_download_reconcile=args.skip_download_reconcile,
             skip_pending_csv=args.skip_pending_csv,
             trim_queue=args.trim_queue,
         )
         stage_seconds.append(
             (
-                "slskd-spotify",
+                "slskd_spotify",
                 _run_python_step(
-                    "slskd-spotify.py",
+                    SLSKD_SCRIPT,
                     slskd_argv,
                     workspace=workspace,
-                    label="slskd-spotify",
+                    label="slskd_spotify",
                 ),
             )
         )
@@ -708,7 +699,7 @@ def main() -> None:
 
     if args.dry_run or args.skip_slskd:
         reason = "dry-run" if args.dry_run else "--skip-slskd"
-        print(f"\nPipeline stopped before slskd-spotify ({reason}).", file=sys.stderr)
+        print(f"\nPipeline stopped before slskd_spotify ({reason}).", file=sys.stderr)
         _print_pipeline_summary(
             stage_seconds=stage_seconds,
             stopped_early=stopped_early or reason,
@@ -716,7 +707,7 @@ def main() -> None:
         return
 
     if not confirm_slskd(queue_path=queue_path, assume_yes=args.yes):
-        print("Skipped slskd-spotify.py.", file=sys.stderr)
+        print("Skipped slskd_spotify.py.", file=sys.stderr)
         _print_pipeline_summary(
             stage_seconds=stage_seconds, stopped_early="user declined slskd"
         )
@@ -728,18 +719,17 @@ def main() -> None:
         resume=False,
         checkpoint_path=checkpoint_path,
         download_settle_seconds=args.download_settle_seconds,
-        skip_download_reconcile=args.skip_download_reconcile,
         skip_pending_csv=args.skip_pending_csv,
         trim_queue=args.trim_queue,
     )
     stage_seconds.append(
         (
-            "slskd-spotify",
+            "slskd_spotify",
             _run_python_step(
-                "slskd-spotify.py",
+                SLSKD_SCRIPT,
                 slskd_argv,
                 workspace=workspace,
-                label="slskd-spotify",
+                label="slskd_spotify",
             ),
         )
     )
