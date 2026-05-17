@@ -77,7 +77,6 @@ def is_solid_enqueue_pick(
     album: str,
     track: str,
     search_strategy: str,
-    album_preferred_search: bool = False,
 ) -> bool:
     """
     True when a ranked file is good enough to enqueue without trying another query.
@@ -90,9 +89,6 @@ def is_solid_enqueue_pick(
     cleanliness = float(candidate.get("cleanliness") or 0.0)
     if cleanliness >= STRONG_CLEANLINESS_THRESHOLD:
         return True
-
-    if album_preferred_search:
-        return cleanliness >= SOLID_CLEANLINESS_THRESHOLD
 
     album_s = (album or "").strip()
     track_s = (track or "").strip()

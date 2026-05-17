@@ -20,7 +20,6 @@ from slskd_config import (
     ENQUEUE_TIMEOUT,
     HOST,
     QUEUE_LIMIT,
-    USE_DIRECT_API,
     make_headers,
 )
 from slskd_logging import logger
@@ -30,7 +29,6 @@ _api_path = API_PATH
 _api_key = API_KEY
 _headers = make_headers(API_KEY)
 _enqueue_timeout = ENQUEUE_TIMEOUT
-_use_direct_api = USE_DIRECT_API
 _queue_limit = QUEUE_LIMIT
 _queued_files_tracker: List[Dict[str, Any]] = []
 _stats: Any = None
@@ -62,20 +60,18 @@ def configure_queue_context(
     api_key: str,
     headers: Dict[str, str],
     enqueue_timeout: int,
-    use_direct_api: bool,
     queue_limit: int,
     queued_files_tracker: List[Dict[str, Any]],
     stats: Any,
 ) -> None:
     """Configure runtime values used by queue/download helpers."""
     global _host, _api_path, _api_key, _headers, _enqueue_timeout
-    global _use_direct_api, _queue_limit, _queued_files_tracker, _stats
+    global _queue_limit, _queued_files_tracker, _stats
     _host = host
     _api_path = api_path
     _api_key = api_key
     _headers = headers
     _enqueue_timeout = enqueue_timeout
-    _use_direct_api = use_direct_api
     _queue_limit = queue_limit
     _queued_files_tracker = queued_files_tracker
     _stats = stats
@@ -249,38 +245,6 @@ async def enqueue_files_async(
         else:
             file_info_list = file_ids
             logger.info(f"Sending file IDs: {file_ids}")
-
-        if _use_direct_api:
-            try:
-                post_url = f"{_host.rstrip('/')}{_api_path}/transfers/downloads/{username}"
-                logger.debug(f"Direct API call to: {post_url}")
-                logger.debug(f"Payload: {json.dumps(file_info_list)}")
-
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    resp = await asyncio.wait_for(
-                        asyncio.get_event_loop().run_in_executor(
-                            pool,
-                            lambda: requests.post(
-                                post_url, json=file_info_list, headers=_headers
-                            ),
-                        ),
-                        timeout=_enqueue_timeout,
-                    )
-                resp.raise_for_status()
-                logger.info(
-                    f"Successfully enqueued {len(file_info_list)} file(s) for {username} using direct API"
-                )
-
-                for file_info in search_results:
-                    _record_tracked_enqueue(username, file_info, row_index=row_index)
-
-                if _stats is not None:
-                    _stats.enqueued_files += len(file_info_list)
-                return len(file_info_list)
-            except Exception:
-                if _use_direct_api:
-                    raise
-                logger.warning("Direct API enqueue failed, trying library method")
 
         with concurrent.futures.ThreadPoolExecutor() as pool:
             await asyncio.wait_for(

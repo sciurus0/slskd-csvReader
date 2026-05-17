@@ -73,8 +73,8 @@ Canonical files live under `data/` — see [docs/DEV_OPS.md](docs/DEV_OPS.md).
 | `merge_queue.py` | Merge export into `data/to_queue.csv` |
 | `slskd_spotify.py` | Search, enqueue, reconcile downloads |
 | `trim_queue.py` | Drop ledger successes from queue (same as `--trim-queue`) |
-| `pipeline_cleanup.py` | Remove ephemeral pending CSVs |
-| `backfill_ledger.py` | One-time `artist_primary` column on old ledgers |
+| `pipeline_cleanup.py` | Remove ephemeral pending CSVs (preferred over slskd flags) |
+| `scripts/backfill_ledger.py` | One-time `artist_primary` column on old ledgers |
 
 ## DEV vs PROD
 

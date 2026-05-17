@@ -13,12 +13,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from slskd_config import (
-    ALBUM_PREFERRED_SEARCH,
     ALLOWED_FORMATS,
     API_PATH,
     CIRCUIT_BREAKER_THRESHOLD,
     CIRCUIT_BREAKER_TIMEOUT,
-    EXACT_MATCH,
     EXCLUDED_EXTENSIONS,
     HOST,
     MAX_POLLS,
@@ -43,8 +41,6 @@ _poll_interval = POLL_INTERVAL
 _max_polls = MAX_POLLS
 _circuit_breaker_threshold = CIRCUIT_BREAKER_THRESHOLD
 _circuit_breaker_timeout = CIRCUIT_BREAKER_TIMEOUT
-_album_preferred_search = ALBUM_PREFERRED_SEARCH
-_exact_match = EXACT_MATCH
 _excluded_extensions = list(EXCLUDED_EXTENSIONS)
 _allowed_formats = list(ALLOWED_FORMATS)
 _circuit_breaker_state = initial_circuit_breaker_state()
@@ -62,15 +58,13 @@ def configure_search_context(
     max_polls: int,
     circuit_breaker_threshold: int,
     circuit_breaker_timeout: int,
-    album_preferred_search: bool,
-    exact_match: bool,
     excluded_extensions: List[str],
     allowed_formats: List[str],
 ) -> None:
     """Configure runtime values used by search/ranking logic."""
     global _host, _api_path, _headers, _rate_limit_delay, _max_retries, _search_timeout
     global _poll_interval, _max_polls, _circuit_breaker_threshold, _circuit_breaker_timeout
-    global _album_preferred_search, _exact_match, _excluded_extensions, _allowed_formats
+    global _excluded_extensions, _allowed_formats
 
     _host = host
     _api_path = api_path
@@ -82,8 +76,6 @@ def configure_search_context(
     _max_polls = max_polls
     _circuit_breaker_threshold = circuit_breaker_threshold
     _circuit_breaker_timeout = circuit_breaker_timeout
-    _album_preferred_search = album_preferred_search
-    _exact_match = exact_match
     _excluded_extensions = excluded_extensions
     _allowed_formats = allowed_formats
 
@@ -269,29 +261,6 @@ def get_priority_group(filename):
     return 999
 
 
-def is_exact_match(filename, artist, album, track):
-    """Check for exact match of artist, album, and track in filename."""
-    if not filename:
-        return False
-
-    filename_lower = filename.lower()
-    artist_lower = artist.lower()
-    album_lower = album.lower()
-    track_lower = track.lower()
-    expected_pattern = f"{artist_lower} - {album_lower} - {track_lower}"
-    basename = os.path.basename(filename_lower)
-    file_without_ext = os.path.splitext(basename)[0]
-
-    if file_without_ext == expected_pattern:
-        return True
-
-    def normalize(s):
-        s = s.replace("_", " ").replace(".", " ").replace("-", " ")
-        return " ".join(s.split())
-
-    return normalize(file_without_ext) == normalize(expected_pattern)
-
-
 def score_filename_cleanliness(filename, artist, album, track):
     """Score how well a filename matches expected music naming patterns."""
     if not filename:
@@ -383,74 +352,15 @@ def score_filename_cleanliness(filename, artist, album, track):
     return max(0.0, min(score, 10.0))
 
 
-def detect_search_intent(artist: str, album: str, track: str) -> Dict[str, bool]:
-    """Detect if user is explicitly searching for version variants."""
-    search_terms = f"{artist} {album} {track}".lower()
-    album_suggests_live = album and any(
-        term in album.lower()
-        for term in ["live", "unplugged", "concert", "mtv unplugged", "in concert"]
-    )
-    return {
-        "allow_remix": "remix" in search_terms
-        or "remixed" in search_terms
-        or "re-mix" in search_terms,
-        "allow_live": "live" in search_terms or album_suggests_live,
-        "allow_cover": "cover" in search_terms,
-        "allow_acoustic": "acoustic" in search_terms,
-        "allow_instrumental": "instrumental" in search_terms,
-        "allow_demo": "demo" in search_terms,
-        "allow_karaoke": "karaoke" in search_terms,
-    }
-
-
-def should_reject_version(
-    filename: str, track: str, search_intent: Dict[str, bool]
-) -> Optional[str]:
-    """Check if file contains unwanted version markers."""
-    if not _album_preferred_search:
-        return None
-
-    basename = os.path.basename(filename).lower()
-    track_words = set(track.lower().split()) if track else set()
-    suspicious_patterns: Dict[str, Tuple[str, bool]] = {
-        "remix": (r"\b(remix|remixed|re-mix)\b", search_intent.get("allow_remix", False)),
-        "live": (r"\b(live|concert)\b", search_intent.get("allow_live", False)),
-        "cover": (r"\bcover\b", search_intent.get("allow_cover", False)),
-        "acoustic": (r"\bacoustic\b", search_intent.get("allow_acoustic", False)),
-        "instrumental": (
-            r"\binstrumental\b",
-            search_intent.get("allow_instrumental", False),
-        ),
-        "demo": (r"\bdemo\b", search_intent.get("allow_demo", False)),
-        "alternate": (r"\b(alternate|alternative|alt\s+version)\b", False),
-        "edit": (r"\b(radio\s+edit|extended|club\s+mix|dj\s+mix)\b", False),
-        "karaoke": (r"\bkaraoke\b", search_intent.get("allow_karaoke", False)),
-        "tribute": (r"\btribute\b", False),
-    }
-
-    for pattern_name, (pattern, is_allowed) in suspicious_patterns.items():
-        match = re.search(pattern, basename)
-        if match:
-            matched_word = match.group(0)
-            if matched_word in track_words:
-                continue
-            if not is_allowed:
-                return f"unwanted version: {pattern_name}"
-    return None
-
-
 def rank_all_results(
     responses: List[Dict[str, Any]],
     artist: str,
     album: Optional[str] = None,
     track: Optional[str] = None,
-    search_intent: Optional[Dict[str, bool]] = None,
     target_duration_ms: Optional[int] = None,
     search_strategy: Optional[str] = None,
 ):
     """Rank valid results and return (ranked_candidates, rejection_reasons)."""
-    if search_intent is None:
-        search_intent = {}
     all_candidates = []
     rejection_reasons = []
 
@@ -488,42 +398,22 @@ def rank_all_results(
                 rejection_reasons.append(f"not allowed format: {os.path.splitext(filename)[1]}")
                 continue
 
-            if _album_preferred_search:
-                rejection_reason = should_reject_version(filename, track or "", search_intent)
-                if rejection_reason:
-                    rejection_reasons.append(rejection_reason)
-                    continue
-
             has_album_match = False
             if track and album:
-                if _exact_match:
-                    match_found = is_exact_match(filename, artist, album, track)
-                    has_album_match = bool(
-                        album and normalized_contains(filename, album)
-                    )
-                elif _album_preferred_search:
-                    match_found = normalized_contains(filename, track)
-                    has_album_match = bool(
-                        album and normalized_contains(filename, album)
-                    )
-                else:
-                    match_found, has_album_match = path_matches_row(
-                        filename,
-                        artist=artist,
-                        album=album,
-                        track=track,
-                        search_strategy=search_strategy,
-                    )
+                match_found, has_album_match = path_matches_row(
+                    filename,
+                    artist=artist,
+                    album=album,
+                    track=track,
+                    search_strategy=search_strategy,
+                )
             elif track and not album:
-                if _exact_match:
-                    match_found = is_exact_match(filename, artist, "", track)
-                else:
-                    match_found, _ = path_matches_row(
-                        filename,
-                        artist=artist,
-                        track=track,
-                        search_strategy=search_strategy,
-                    )
+                match_found, _ = path_matches_row(
+                    filename,
+                    artist=artist,
+                    track=track,
+                    search_strategy=search_strategy,
+                )
             elif album and not track:
                 match_found, has_album_match = path_matches_row(
                     filename,
@@ -560,33 +450,17 @@ def rank_all_results(
                 candidate["duration_delta_ms"] = None
             all_candidates.append(candidate)
 
-    if _album_preferred_search:
-        all_candidates.sort(
-            key=lambda x: (
-                not x.get("has_album_match", False),
-                x["priority"],
-                -x["cleanliness"],
-                -x["size"],
-                x["duration_delta_ms"] if x["duration_delta_ms"] is not None else 10**12,
-            )
+    all_candidates.sort(
+        key=lambda x: (
+            x["priority"],
+            -x["cleanliness"],
+            -x["size"],
+            x["duration_delta_ms"] if x["duration_delta_ms"] is not None else 10**12,
         )
-    else:
-        all_candidates.sort(
-            key=lambda x: (
-                x["priority"],
-                -x["cleanliness"],
-                -x["size"],
-                x["duration_delta_ms"] if x["duration_delta_ms"] is not None else 10**12,
-            )
-        )
+    )
 
     if all_candidates:
         logger.info(f"Ranked {len(all_candidates)} valid candidates")
-        if _album_preferred_search:
-            album_matches = sum(1 for c in all_candidates if c.get("has_album_match", False))
-            logger.info(
-                f"  {album_matches} with album match, {len(all_candidates) - album_matches} without"
-            )
         top_n = min(5, len(all_candidates))
         logger.info(f"Top {top_n} candidates:")
         for i, candidate in enumerate(all_candidates[:top_n], 1):
