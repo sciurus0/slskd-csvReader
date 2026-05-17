@@ -31,10 +31,13 @@ from slskd_queue import (
     snapshot_queued_files_tracker,
     wait_and_reconcile_downloads,
 )
+from slskd_normalize import parse_artist_alternates_list
 from slskd_query import (
     DEFAULT_MAX_QUERY_ATTEMPTS,
+    DEFAULT_MAX_QUERY_ATTEMPTS_WITH_ALTERNATE,
     build_query_candidates,
     enqueue_pick_score,
+    first_distinct_alternate,
     is_solid_enqueue_pick,
 )
 from slskd_pipeline_state import record_successful_downloads
@@ -325,11 +328,19 @@ async def process_row(client, row, row_index, total_rows):
         except (TypeError, ValueError):
             target_duration_ms = None
 
+    alternates = parse_artist_alternates_list(row.get("artist_alternates") or "")
+    first_alternate = first_distinct_alternate(artist, alternates)
+    max_query_attempts = (
+        DEFAULT_MAX_QUERY_ATTEMPTS_WITH_ALTERNATE
+        if first_alternate
+        else DEFAULT_MAX_QUERY_ATTEMPTS
+    )
     query_candidates = build_query_candidates(
         artist=artist,
         album=album,
         track=track,
-        max_query_attempts=DEFAULT_MAX_QUERY_ATTEMPTS,
+        artist_alternates=[first_alternate] if first_alternate else None,
+        max_query_attempts=max_query_attempts,
     )
     if not query_candidates:
         result_entry["message"] = "No valid search query could be generated"
@@ -338,7 +349,6 @@ async def process_row(client, row, row_index, total_rows):
 
     try:
         files_queued = 0
-        search_intent = detect_search_intent(artist, album or "", track or "")
         ranked_candidates: List[Dict[str, Any]] = []
         rejection_reasons: List[str] = []
         selected_pick: Optional[Dict[str, Any]] = None
@@ -348,19 +358,23 @@ async def process_row(client, row, row_index, total_rows):
             query = str(candidate["query"])
             strategy = str(candidate["strategy"])
             variant = str(candidate["variant"])
+            rank_artist = str(candidate.get("search_artist") or artist).strip() or artist
             result_entry["attempts"] = attempt_idx
 
             logger.info(
-                f"🔍 Searching for: {query} ({strategy}/{variant}) ({row_index}/{total_rows})"
+                f"🔍 Searching for: {query} ({strategy}/{variant}"
+                f"{f', rank_artist={rank_artist!r}' if rank_artist != artist else ''}) "
+                f"({row_index}/{total_rows})"
             )
             resp_list = await search_slskd_async(query)
             if not resp_list:
                 logger.info(f"No results for query attempt {attempt_idx}: {query}")
                 continue
 
+            search_intent = detect_search_intent(rank_artist, album or "", track or "")
             attempt_ranked, rejection_reasons = rank_all_results(
                 resp_list,
-                artist,
+                rank_artist,
                 album if album else None,
                 track if track else None,
                 search_intent,
