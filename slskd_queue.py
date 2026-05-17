@@ -1,5 +1,5 @@
 """
-Queue utilities for the slskd-spotify workflow: client init, enqueue, per-user
+Queue utilities for the slskd_spotify workflow: client init, enqueue, per-user
 queue selection, and post-run download reconciliation against the SLSKD transfers API.
 """
 

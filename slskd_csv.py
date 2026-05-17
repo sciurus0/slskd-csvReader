@@ -1,5 +1,5 @@
 """
-CSV and reporting utilities for the slskd-spotify workflow.
+CSV and reporting utilities for the slskd_spotify workflow.
 
 This module centralizes CSV encoding detection, row counting, checkpointing,
 and report generation so they can be reused independently of the main script.

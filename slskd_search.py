@@ -1,5 +1,5 @@
 """
-Search and ranking utilities for the slskd-spotify workflow.
+Search and ranking utilities for the slskd_spotify workflow.
 """
 
 import asyncio

@@ -16,7 +16,7 @@ Full import logs stay in gitignored `data/logs/`; this folder holds **small comm
 From repo root (DEV):
 
 ```bash
-python3 slskd-spotify.py \
+python3 slskd_spotify.py \
   --csv fixtures/srch/validate_input.csv \
   --output-dir data/logs \
   --skip-pending-csv
@@ -26,7 +26,7 @@ Optional: copy fixture to workspace for pending-default naming:
 
 ```bash
 cp fixtures/srch/validate_input.csv data/to_queue_pending_validate.csv
-python3 slskd-spotify.py --csv data/to_queue_pending_validate.csv --output-dir data/logs
+python3 slskd_spotify.py --csv data/to_queue_pending_validate.csv --output-dir data/logs
 python3 pipeline_cleanup.py
 ```
 

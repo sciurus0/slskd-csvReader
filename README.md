@@ -56,7 +56,7 @@ python3 run_pipeline.py --pick 1,4,7 -y
 python3 run_pipeline.py --resume -y
 
 # Process the queue only (after merge)
-python3 slskd-spotify.py --trim-queue
+python3 slskd_spotify.py --trim-queue
 
 # Refresh queue from latest Spotify export (no slskd)
 python3 merge_queue.py
@@ -71,7 +71,7 @@ Canonical files live under `data/` — see [docs/DEV_OPS.md](docs/DEV_OPS.md).
 | `run_pipeline.py` | Interactive Spotify → merge → slskd orchestrator |
 | `spotify_playlist_fetch.py` | Export playlists to `data/exports/` |
 | `merge_queue.py` | Merge export into `data/to_queue.csv` |
-| `slskd-spotify.py` | Search, enqueue, reconcile downloads |
+| `slskd_spotify.py` | Search, enqueue, reconcile downloads |
 | `trim_queue.py` | Drop ledger successes from queue (same as `--trim-queue`) |
 | `pipeline_cleanup.py` | Remove ephemeral pending CSVs |
 | `backfill_ledger.py` | One-time `artist_primary` column on old ledgers |

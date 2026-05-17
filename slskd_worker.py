@@ -1,5 +1,5 @@
 """
-CSV batch processing and row workflow for the slskd-spotify script.
+CSV batch processing and row workflow for the slskd_spotify script.
 """
 
 from __future__ import annotations

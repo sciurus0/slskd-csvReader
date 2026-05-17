@@ -69,8 +69,8 @@ queued_files_tracker = []  # Global list to track all queued files for status ch
 
 _GOLDEN_EPILOG = """
 Golden path (from repo root):
-  python3 slskd-spotify.py --trim-queue
-  python3 slskd-spotify.py --resume
+  python3 slskd_spotify.py --trim-queue
+  python3 slskd_spotify.py --resume
 
 See docs/DEV_OPS.md for merge, trim, pending CSV, and legacy flags.
 """
