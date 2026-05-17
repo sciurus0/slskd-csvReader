@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Merge today's Spotify export into the Soulseek queue CSV.
+Merge the latest Spotify export into the Soulseek queue CSV.
 
-Steps (local calendar date ``YYYYMMDD``):
+Steps:
 
-1. Require ``YYYYMMDD-spotify-export.csv`` (fail if missing; never wipe the queue).
-2. If ``to_queue.csv`` exists, copy it to ``YYYYMMDD-to_queue.csv`` (overwrite OK).
+1. Require a ``YYYYMMDD-spotify-export.csv`` (default: newest dated file in the workspace).
+2. If ``to_queue.csv`` exists, copy it to ``<export-date>-to_queue.csv`` (overwrite OK).
 3. Filter export rows by per-playlist ``added_at`` watermarks (``merge_state.json``) and
    ``success_ledger.csv`` unless ``--force-full-import``.
 4. Load backup rows, then append filtered Spotify export rows (existing queue first).
@@ -31,7 +31,6 @@ import argparse
 import csv
 import shutil
 import sys
-from datetime import datetime
 from io import StringIO
 from pathlib import Path
 from typing import Dict, Iterable, List, Set, Tuple
@@ -45,6 +44,7 @@ from slskd_pipeline_state import (
     pipeline_row_dedupe_key,
     save_merge_state,
 )
+from slskd_export_paths import parse_export_date, resolve_spotify_export
 from slskd_normalize import normalize_queue_row
 from slskd_sanitize import sanitize_queue_field
 
@@ -71,13 +71,10 @@ def _die(msg: str, code: int = 1) -> None:
 
 
 def _parse_date(s: str) -> str:
-    if len(s) != 8 or not s.isdigit():
-        _die(f"--date must be YYYYMMDD, got {s!r}")
     try:
-        datetime.strptime(s, "%Y%m%d")
-    except ValueError:
-        _die(f"Invalid calendar date: {s!r}")
-    return s
+        return parse_export_date(s)
+    except ValueError as e:
+        _die(f"--date {e}")
 
 
 def _norm_keys(row: Dict[str, str]) -> Dict[str, str]:
@@ -251,13 +248,13 @@ def main() -> None:
         type=str,
         default=None,
         metavar="YYYYMMDD",
-        help="Calendar date for filenames (default: today's local date)",
+        help="Export/backup date prefix (default: date from chosen export, or newest export)",
     )
     parser.add_argument(
         "--spotify-export",
         type=Path,
         default=None,
-        help="Path to Spotify export CSV (default: <workspace>/<DATE>-spotify-export.csv)",
+        help="Path to Spotify export CSV (default: newest *-spotify-export.csv in workspace)",
     )
     parser.add_argument(
         "--queue",
@@ -284,13 +281,17 @@ def main() -> None:
     args = parser.parse_args()
 
     workspace = args.workspace.resolve()
-    date_str = _parse_date(args.date) if args.date else datetime.now().strftime("%Y%m%d")
 
-    spotify_path = (
-        args.spotify_export.resolve()
-        if args.spotify_export
-        else workspace / f"{date_str}-spotify-export.csv"
-    )
+    try:
+        spotify_path, date_str = resolve_spotify_export(
+            workspace,
+            date_str=_parse_date(args.date) if args.date else None,
+            export_path=args.spotify_export,
+        )
+    except FileNotFoundError as e:
+        _die(f"Spotify export not found (required): {e}")
+    except ValueError as e:
+        _die(str(e))
     queue_path = args.queue.resolve() if args.queue else workspace / QUEUE_FILENAME
     backup_path = (
         args.backup.resolve() if args.backup else workspace / f"{date_str}-to_queue.csv"
@@ -316,7 +317,7 @@ def main() -> None:
     merged, deduped_spotify = merge_rows_with_dedupe(rows_backup, rows_spotify)
 
     print(
-        f"merge_queue: date={date_str} backup_rows={len(rows_backup)} "
+        f"merge_queue: date={date_str} export={spotify_path.name} backup_rows={len(rows_backup)} "
         f"export_rows={filter_stats.export_rows_in} "
         f"skipped_watermark={filter_stats.skipped_watermark} "
         f"skipped_ledger={filter_stats.skipped_ledger} "
