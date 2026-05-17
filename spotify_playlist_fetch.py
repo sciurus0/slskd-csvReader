@@ -44,10 +44,10 @@ Scopes: playlist-read-private, playlist-read-collaborative
 
 Usage:
     python3 spotify_playlist_fetch.py "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
-    python3 spotify_playlist_fetch.py 37i9dQZF1DXcBWIGoYBM5M -o my_playlist.csv
+    python3 spotify_playlist_fetch.py 37i9dQZF1DXcBWIGoYBM5M
     python3 spotify_playlist_fetch.py --list 1
     python3 spotify_playlist_fetch.py --list-playlists --list-limit 1
-    python3 spotify_playlist_fetch.py --pick 3 -o my_export.csv
+    python3 spotify_playlist_fetch.py --pick 3
     python3 spotify_playlist_fetch.py --pick 1,4,7
     python3 spotify_playlist_fetch.py --login-only
     SPOTIFY_DEBUG=1 python3 spotify_playlist_fetch.py --list 1

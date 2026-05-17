@@ -23,7 +23,7 @@ Everything else is derived or ephemeral.
 | `data/logs/` | Import logs and `results_*.csv` reports |
 | `data/archive/csv-YYYYMMDD/` | Dated backups before merge or trim |
 
-Do not treat `to_queue_pending.csv` as a second source of truth. After a full run it lists what still failed; the next full run should start from `data/to_queue.csv` (often after `--trim-queue`).
+Do not treat `data/to_queue_pending.csv` as a second source of truth. After a full run it lists what still failed; the next full run should start from `data/to_queue.csv` (often after `--trim-queue`).
 
 ## Typical flows
 

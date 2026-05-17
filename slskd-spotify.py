@@ -126,22 +126,22 @@ Examples:
   python3 slskd-spotify.py --retry-failed
   
   # Change allowed formats and their priority
-  python slskd-spotify.py --formats .mp3 .flac
+  python3 slskd-spotify.py --formats .mp3 .flac
   
   # Change excluded file types
-  python slskd-spotify.py --exclude .lrc .nfo .m3u
+  python3 slskd-spotify.py --exclude .lrc .nfo .m3u
   
   # Custom log directory under the workspace
   python3 slskd-spotify.py --output-dir data/logs
   
   # Run with debug logging
-  python slskd-spotify.py --debug
+  python3 slskd-spotify.py --debug
   
   # Use direct API mode (bypass client library)
-  python slskd-spotify.py --direct-api
+  python3 slskd-spotify.py --direct-api
   
   # Generate reports from previous run
-  python slskd-spotify.py --gen-report
+  python3 slskd-spotify.py --gen-report
 
   # Re-run download reconciliation only (no new searches/enqueues)
   python slskd-spotify.py --reconcile-downloads
@@ -152,13 +152,13 @@ Examples:
     --reconcile-log data/logs/slskd_import_20260516_094029.log
   
   # Use exact matching for tracks
-  python slskd-spotify.py --exact-match
+  python3 slskd-spotify.py --exact-match
   
   # Use album-preferred search for higher success rate
-  python slskd-spotify.py --album-preferred-search
+  python3 slskd-spotify.py --album-preferred-search
   
   # Set a queue limit of 50 items per user
-  python slskd-spotify.py --queue-limit 50
+  python3 slskd-spotify.py --queue-limit 50
 """
 
 import argparse

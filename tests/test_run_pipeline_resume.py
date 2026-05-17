@@ -13,7 +13,7 @@ class TestRunPipelineResume(unittest.TestCase):
         ws = Path("/tmp/dev-workspace")
         self.assertEqual(
             _checkpoint_path(ws, None),
-            (ws / "data" / "checkpoint.pkl").resolve(),
+            (ws / "checkpoint.pkl").resolve(),
         )
 
     def test_build_slskd_argv_resume_and_checkpoint(self) -> None:
