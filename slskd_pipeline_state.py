@@ -268,6 +268,49 @@ def load_ledger_keys(workspace: Path) -> Set[DedupeKey]:
     return keys
 
 
+def backfill_success_ledger(
+    workspace: Path,
+    *,
+    dry_run: bool = False,
+) -> Tuple[int, int]:
+    """
+    Rewrite ``success_ledger.csv`` with ``artist_primary`` on every row (POLISH-06).
+
+    Backfills ``artist_primary`` from ``artist`` via N1 rules when missing. Dedupes
+    by ``pipeline_row_dedupe_key`` after normalization. Returns ``(rows_in, rows_out)``.
+    """
+    path = success_ledger_path(workspace)
+    if not path.is_file():
+        return 0, 0
+
+    text = decode_pipeline_text(path.read_bytes())
+    raw = list(csv.DictReader(StringIO(text)))
+    seen: Set[DedupeKey] = set()
+    kept: List[Dict[str, str]] = []
+    for row in raw:
+        norm = normalize_ledger_row(row)
+        key = pipeline_row_dedupe_key(norm)
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(norm)
+
+    if not dry_run and (len(raw) != len(kept) or _ledger_needs_backfill(raw)):
+        atomic_write_pipeline_csv(path, kept, fieldnames=SUCCESS_LEDGER_COLUMNS)
+
+    return len(raw), len(kept)
+
+
+def _ledger_needs_backfill(rows: List[Dict[str, str]]) -> bool:
+    """True if any row lacks ``artist_primary`` or uses a legacy column set."""
+    if not rows:
+        return False
+    fieldnames = rows[0].keys() if rows else ()
+    if "artist_primary" not in fieldnames:
+        return True
+    return any(not (row.get("artist_primary") or "").strip() for row in rows)
+
+
 def append_success_ledger(
     workspace: Path,
     rows: List[Dict[str, str]],
