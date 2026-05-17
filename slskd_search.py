@@ -103,10 +103,22 @@ def _search_job_complete(data: Dict[str, Any]) -> bool:
     return "completed" in state.lower()
 
 
+async def _fetch_search_responses(job_id: str) -> List[Dict[str, Any]]:
+    """Fetch results from the responses endpoint (canonical list when a search finishes)."""
+    responses_url = f"{_host.rstrip('/')}{_api_path}/searches/{job_id}/responses"
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        resp = await asyncio.get_event_loop().run_in_executor(
+            pool, lambda: requests.get(responses_url, headers=_headers)
+        )
+    resp.raise_for_status()
+    return _responses_from_search_payload(resp.json())
+
+
 async def poll_responses_async(job_id):
-    """Poll search job state until complete, then return the latest response list."""
+    """Poll search job state until complete, then return responses from the responses endpoint."""
     state_url = f"{_host.rstrip('/')}{_api_path}/searches/{job_id}"
-    latest_results: List[Dict[str, Any]] = []
+    latest_inline: List[Dict[str, Any]] = []
+    last_state: Optional[str] = None
 
     for poll_num in range(_max_polls):
         if poll_num > 0:
@@ -122,27 +134,46 @@ async def poll_responses_async(job_id):
             if not isinstance(data, dict):
                 continue
 
-            results = _responses_from_search_payload(data)
-            if results:
-                latest_results = results
+            last_state = str(data.get("state") or "")
+            inline = _responses_from_search_payload(data)
+            if inline:
+                latest_inline = inline
 
             if _search_job_complete(data):
+                results = await _fetch_search_responses(job_id)
+                if not results and latest_inline:
+                    results = latest_inline
+                response_count = data.get("responseCount") or data.get("ResponseCount")
                 logger.info(
-                    "Search complete: %d response(s), state=%r",
-                    len(latest_results),
-                    data.get("state"),
+                    "Search complete: %d response(s) fetched, state=%r, responseCount=%r",
+                    len(results),
+                    last_state,
+                    response_count,
                 )
-                return latest_results
+                return results
         except Exception as e:
             logger.warning(f"Error during polling: {e}")
 
-    if latest_results:
+    if latest_inline:
         logger.info(
-            "Search poll limit reached (%d poll(s)); returning %d response(s)",
+            "Search poll limit reached (%d poll(s)); returning %d inline response(s)",
             _max_polls,
-            len(latest_results),
+            len(latest_inline),
         )
-    return latest_results
+        return latest_inline
+
+    try:
+        results = await _fetch_search_responses(job_id)
+        if results:
+            logger.info(
+                "Search poll limit reached (%d poll(s)); fetched %d response(s) from responses endpoint",
+                _max_polls,
+                len(results),
+            )
+        return results
+    except Exception as e:
+        logger.warning(f"Error fetching responses after poll limit: {e}")
+        return []
 
 
 async def search_slskd_async(pattern):
