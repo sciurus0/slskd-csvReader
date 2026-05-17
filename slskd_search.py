@@ -31,6 +31,7 @@ from slskd_config import (
     API_KEY,
 )
 from slskd_logging import logger
+from slskd_normalize import normalized_contains, path_matches_row
 
 _host = HOST
 _api_path = API_PATH
@@ -350,12 +351,12 @@ def score_filename_cleanliness(filename, artist, album, track):
     else:
         score -= 2.0
 
-    if track_lower and track_lower in name_lower:
+    if track_lower and normalized_contains(filename, track):
         score += 1.0
     elif track_lower:
         score -= 3.0
 
-    if album_lower and album_lower in name_lower:
+    if album_lower and normalized_contains(filename, album):
         score += 0.5
 
     suspicious_terms = [
@@ -445,6 +446,7 @@ def rank_all_results(
     track: Optional[str] = None,
     search_intent: Optional[Dict[str, bool]] = None,
     target_duration_ms: Optional[int] = None,
+    search_strategy: Optional[str] = None,
 ):
     """Rank valid results and return (ranked_candidates, rejection_reasons)."""
     if search_intent is None:
@@ -492,36 +494,45 @@ def rank_all_results(
                     rejection_reasons.append(rejection_reason)
                     continue
 
-            match_found = False
+            has_album_match = False
             if track and album:
                 if _exact_match:
                     match_found = is_exact_match(filename, artist, album, track)
+                    has_album_match = bool(
+                        album and normalized_contains(filename, album)
+                    )
                 elif _album_preferred_search:
-                    match_found = track.lower() in filename.lower()
+                    match_found = normalized_contains(filename, track)
+                    has_album_match = bool(
+                        album and normalized_contains(filename, album)
+                    )
                 else:
-                    track_lower = track.lower()
-                    album_lower = album.lower()
-                    filename_lower = filename.lower()
-                    if track_lower == album_lower:
-                        count = filename_lower.count(track_lower)
-                        match_found = (
-                            count >= 2
-                            and artist.lower() in filename_lower
-                            and track_lower in filename_lower
-                        )
-                    else:
-                        match_found = (
-                            track_lower in filename_lower and album_lower in filename_lower
-                        )
+                    match_found, has_album_match = path_matches_row(
+                        filename,
+                        artist=artist,
+                        album=album,
+                        track=track,
+                        search_strategy=search_strategy,
+                    )
             elif track and not album:
                 if _exact_match:
                     match_found = is_exact_match(filename, artist, "", track)
                 else:
-                    match_found = track.lower() in filename.lower()
+                    match_found, _ = path_matches_row(
+                        filename,
+                        artist=artist,
+                        track=track,
+                        search_strategy=search_strategy,
+                    )
             elif album and not track:
-                match_found = album.lower() in filename.lower()
+                match_found, has_album_match = path_matches_row(
+                    filename,
+                    artist=artist,
+                    album=album,
+                    search_strategy=search_strategy,
+                )
             else:
-                match_found = artist.lower() in filename.lower()
+                match_found = normalized_contains(filename, artist)
 
             if not match_found:
                 rejection_reasons.append("no match for search criteria")
@@ -530,7 +541,6 @@ def rank_all_results(
             cleanliness_score = score_filename_cleanliness(
                 filename, artist, album or "", track or ""
             )
-            has_album_match = album and album.lower() in filename.lower() if album else False
             candidate = {
                 "username": username,
                 "filename": filename,

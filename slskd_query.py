@@ -5,13 +5,19 @@ Design goals:
 - Prefer loose token searches over strict separator-based patterns.
 - Preserve punctuation in the first attempt (literal form).
 - Add punctuation-softened fallbacks as needed.
-- Keep candidate count bounded and deterministic.
+- Keep the number of search attempts bounded and deterministic.
 """
 
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+from slskd_normalize import TRACK_FOCUSED_SEARCH_STRATEGIES, normalized_contains
+
+DEFAULT_MAX_QUERY_ATTEMPTS = 3
+SOLID_CLEANLINESS_THRESHOLD = 6.0
+STRONG_CLEANLINESS_THRESHOLD = 8.0
 
 _FEAT_PATTERN = re.compile(r"\b(?:feat\.?|featuring|ft\.?)\b", re.IGNORECASE)
 _MULTI_ARTIST_SPLIT = re.compile(r"\s*(?:;|,|&|\band\b|\bx\b)\s*", re.IGNORECASE)
@@ -46,15 +52,75 @@ def split_artist_variants(artist: str) -> Tuple[str, List[str]]:
     return primary, variants
 
 
+def is_solid_enqueue_pick(
+    candidate: Dict[str, Any],
+    *,
+    album: str,
+    track: str,
+    search_strategy: str,
+    album_preferred_search: bool = False,
+) -> bool:
+    """
+    True when a ranked file is good enough to enqueue without trying another query.
+
+    Used after search + rank + queue-slot pick: weak matches may trigger a fallback query.
+    """
+    if not candidate:
+        return False
+
+    cleanliness = float(candidate.get("cleanliness") or 0.0)
+    if cleanliness >= STRONG_CLEANLINESS_THRESHOLD:
+        return True
+
+    if album_preferred_search:
+        return cleanliness >= SOLID_CLEANLINESS_THRESHOLD
+
+    album_s = (album or "").strip()
+    track_s = (track or "").strip()
+    path = candidate.get("filename") or ""
+
+    if album_s and track_s:
+        if candidate.get("has_album_match") and cleanliness >= 5.0:
+            return True
+        if search_strategy in TRACK_FOCUSED_SEARCH_STRATEGIES:
+            return (
+                cleanliness >= SOLID_CLEANLINESS_THRESHOLD
+                and normalized_contains(path, track_s)
+            )
+        if search_strategy == "artist_album_track":
+            return (
+                cleanliness >= SOLID_CLEANLINESS_THRESHOLD
+                and normalized_contains(path, album_s)
+                and normalized_contains(path, track_s)
+            )
+        return False
+
+    if track_s:
+        return cleanliness >= SOLID_CLEANLINESS_THRESHOLD
+
+    return cleanliness >= SOLID_CLEANLINESS_THRESHOLD
+
+
+def enqueue_pick_score(
+    pick: Optional[Dict[str, Any]], ranked: List[Dict[str, Any]]
+) -> float:
+    """Sort key for retaining the best weak match across query attempts."""
+    if pick is not None:
+        return float(pick.get("cleanliness") or 0.0)
+    if ranked:
+        return float(ranked[0].get("cleanliness") or 0.0)
+    return 0.0
+
+
 def build_query_candidates(
     *,
     artist: str,
     album: str,
     track: str,
-    max_candidates: int = 3,
+    max_query_attempts: int = DEFAULT_MAX_QUERY_ATTEMPTS,
 ) -> List[Dict[str, object]]:
     """
-    Build ordered, bounded search query candidates.
+    Build ordered, bounded Soulseek search queries (not download/file picks).
 
     Candidate order:
     1) literal query with punctuation preserved
@@ -74,7 +140,7 @@ def build_query_candidates(
             return False
         seen.add(key)
         candidates.append({"query": q, "strategy": strategy, "variant": variant})
-        return len(candidates) >= max_candidates
+        return len(candidates) >= max_query_attempts
 
     if track:
         artist_track = _compact_spaces(f"{artist} {track}")
