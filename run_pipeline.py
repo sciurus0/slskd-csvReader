@@ -11,7 +11,7 @@ Examples:
     python3 run_pipeline.py --dry-run
     python3 run_pipeline.py --skip-slskd
     python3 run_pipeline.py --resume -y
-    python3 run_pipeline.py --slskd-only --csv to_queue_pending.csv -y
+    python3 run_pipeline.py --slskd-only --csv data/to_queue_pending.csv -y
     python3 run_pipeline.py --pick 1,4,7 --continue-on-export-error -y
 """
 
@@ -27,7 +27,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from slskd_config import CHECKPOINT_FILE, load_api_txt
+from slskd_config import CHECKPOINT_BASENAME, load_api_txt
 from slskd_csv import checkpoint_resume_row, load_checkpoint
 from slskd_export_paths import default_new_export_path, parse_export_date
 from slskd_workspace import (
@@ -336,7 +336,7 @@ def _run_python_step(
 
 
 def _checkpoint_path(workspace: Path, explicit: Optional[Path]) -> Path:
-    return (explicit or workspace / CHECKPOINT_FILE).resolve()
+    return (explicit or workspace / CHECKPOINT_BASENAME).resolve()
 
 
 def _print_resume_hint(checkpoint_path: Path) -> None:
@@ -504,7 +504,7 @@ def main() -> None:
         "--checkpoint-file",
         type=Path,
         default=None,
-        help=f"Checkpoint pickle for slskd resume (default: <workspace>/{CHECKPOINT_FILE})",
+        help=f"Checkpoint pickle for slskd resume (default: <workspace>/{CHECKPOINT_BASENAME})",
     )
     parser.add_argument(
         "--trim-queue",

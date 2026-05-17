@@ -1,5 +1,5 @@
 """
-Cross-run pipeline state: merge watermarks and success ledger (Track C).
+Cross-run pipeline state: merge watermarks and success ledger.
 
 Files live in the pipeline workspace (gitignored), e.g. ``data/``:
 ``merge_state.json``, ``success_ledger.csv``.
