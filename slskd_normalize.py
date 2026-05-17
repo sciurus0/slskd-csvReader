@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Tuple
 
+from slskd_sanitize import sanitize_queue_field
+
 _FEAT_PATTERN = re.compile(r"\b(?:feat\.?|featuring|ft\.?)\b", re.IGNORECASE)
 _COLLAB_LIST_SPLIT = re.compile(r"\s*[,;]\s*")
 _MATCH_PUNCT_PATTERN = re.compile(r"[^\w\s]", re.UNICODE)
@@ -178,12 +180,27 @@ def primary_artist_for_merge(artist: str) -> str:
     return primary or (artist or "").strip()
 
 
+def normalize_album_track_n4(row: Dict[str, str]) -> Dict[str, str]:
+    """
+    NORM-04 — album and track columns at merge (sanitize only).
+
+    Applies :func:`slskd_sanitize.sanitize_queue_field` to ``album`` and ``track`` only.
+    Does not strip remix/live/feat./soundtrack markers. See ``slskd_sanitize`` module doc
+    for the approved transform list (Phase A sign-off).
+    """
+    row["album"] = sanitize_queue_field((row.get("album") or "").strip())
+    row["track"] = sanitize_queue_field((row.get("track") or "").strip())
+    return row
+
+
 def normalize_queue_row(row: Dict[str, str]) -> Dict[str, str]:
     """
-    Apply merge-time artist rules (in place).
+    Apply merge-time **artist** rules (in place).
 
     Expects ``artist`` already sanitized. Preserves full credits in ``artist``;
-    sets ``artist_primary`` and ``artist_alternates`` for dedupe and future search tuning.
+    sets ``artist_primary`` and ``artist_alternates`` for dedupe and search.
+
+    Album and track are **not** modified here — use :func:`normalize_album_track_n4`.
     """
     artist = (row.get("artist") or "").strip()
     if not artist:
