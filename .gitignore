@@ -2,6 +2,10 @@
 .DS_Store
 /checkpoint.pkl
 /logs
+/data/*
+!/data/.gitkeep
+!/data/exports/
+!/data/exports/.gitkeep
 /api.txt
 
 # Local planning doc (not tracked)
