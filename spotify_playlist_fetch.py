@@ -83,6 +83,8 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime
 from pathlib import Path
+
+from slskd_export_paths import default_new_export_path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -789,7 +791,7 @@ def main() -> None:
         "-o",
         "--output",
         default=None,
-        help="Output CSV path (default: YYYYMMDD-spotify-export.csv, local date)",
+        help="Output CSV path (default: <cwd>/YYYYMMDD-spotify-export.csv, today's local date)",
     )
     parser.add_argument(
         "--list-playlists",
@@ -881,7 +883,8 @@ def main() -> None:
         and (args.pick is not None or bool(args.playlist))
     )
     if needs_export and args.output is None:
-        args.output = f"{datetime.now().strftime('%Y%m%d')}-spotify-export.csv"
+        path, _ = default_new_export_path(Path.cwd())
+        args.output = str(path)
 
     token_path = args.token_cache or DEFAULT_TOKEN_CACHE
     client_id = (
