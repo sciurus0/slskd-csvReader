@@ -51,7 +51,7 @@ _csv_file: str = ""
 _batch_size: int = 0
 _checkpoint_file: str = ""
 _album_preferred_search: bool = _CONFIG_ALBUM_PREF
-_download_settle_seconds: float = 600.0
+_download_settle_seconds: float = 300.0
 _skip_download_reconcile: bool = False
 _write_pending_csv: bool = True
 _pending_csv_path: Optional[str] = None
@@ -68,7 +68,7 @@ def configure_worker_context(
     batch_size: int,
     checkpoint_file: str,
     album_preferred_search: bool,
-    download_settle_seconds: float = 600.0,
+    download_settle_seconds: float = 300.0,
     skip_download_reconcile: bool = False,
     write_pending_csv: bool = True,
     pending_csv_path: Optional[str] = None,
