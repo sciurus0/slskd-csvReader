@@ -9,8 +9,8 @@ Steps (local calendar date ``YYYYMMDD``):
 3. Filter export rows by per-playlist ``added_at`` watermarks (``merge_state.json``) and
    ``success_ledger.csv`` unless ``--force-full-import``.
 4. Load backup rows, then append filtered Spotify export rows (existing queue first).
-5. Sanitize ``artist`` / ``album`` / ``track``; pass through ``duration_ms``, ``spotify_track_id``,
-   ``is_unavailable`` when present.
+5. Normalize ``artist`` (Track B N1: primary before ``;``), then sanitize names; pass through
+   ``duration_ms``, ``spotify_track_id``, ``is_unavailable`` when present.
 6. Dedupe with hybrid key: ``spotify_track_id`` when set, else sanitized (artist, album, track).
    Queue rows win; duplicate export rows are skipped.
 7. Write wide ``to_queue.csv`` as UTF-8 with BOM (atomic replace); advance watermarks.
@@ -45,6 +45,7 @@ from slskd_pipeline_state import (
     pipeline_row_dedupe_key,
     save_merge_state,
 )
+from slskd_normalize import normalize_queue_row
 from slskd_sanitize import sanitize_queue_field
 
 QUEUE_FILENAME = "to_queue.csv"
@@ -100,7 +101,8 @@ def _boolish_field(raw: str) -> str:
 
 
 def _sanitize_pipeline_row(row: Dict[str, str]) -> Dict[str, str]:
-    """File hygiene on names; pass through identity and duration fields."""
+    """Normalize (Track B), then file hygiene on names; pass through identity fields."""
+    row = normalize_queue_row(dict(row))
     return {
         "artist": sanitize_queue_field(row.get("artist", "")),
         "album": sanitize_queue_field(row.get("album", "")),
