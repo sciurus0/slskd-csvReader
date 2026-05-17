@@ -475,7 +475,7 @@ def main() -> None:
     parser.add_argument(
         "--skip-download-reconcile",
         action="store_true",
-        help="Passed to slskd-spotify.py",
+        help="[legacy] Passed to slskd-spotify.py (enqueue-only; avoid)",
     )
     parser.add_argument(
         "--skip-pending-csv",

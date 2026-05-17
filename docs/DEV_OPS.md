@@ -2,6 +2,26 @@
 
 Short guide for the **slskd-csvReader** DEV copy. Production uses the same scripts under `PROD/` with its own `data/` tree.
 
+**New here?** Start with [README.md](../README.md) (prerequisites, `api.txt`, install). This doc is the day-to-day operator reference.
+
+## Golden path vs everything else
+
+Use these daily; ignore the rest unless you have a specific recovery or tuning need.
+
+| Tier | What | Examples |
+| --- | --- | --- |
+| **Golden** | End-to-end or queue processing | `run_pipeline.py --pick … -y`, `--resume -y`, `slskd-spotify.py --trim-queue`, `merge_queue.py` |
+| **Tuning** | Rate, formats, debug | `slskd-spotify.py --delay`, `--formats`, `--batch-size`, `--download-settle-seconds` |
+| **Hygiene** | Same behavior as flags on slskd | `trim_queue.py`, `pipeline_cleanup.py --ephemeral` |
+| **Recovery** | Fix a past run without re-searching | `slskd-spotify.py --reconcile-downloads`, `--gen-report`, `--retry-failed` |
+| **Legacy** | Pre–SRCH-02 / enqueue-only; avoid | `--skip-download-reconcile`, `--direct-api`, `--exact-match`, `--album-preferred-search` |
+
+`slskd-spotify.py --help` groups flags the same way. Legacy flags still work but log a deprecation warning.
+
+### CLI audit (local logs)
+
+Under `data/logs/`, recent import runs use the **default** path: reconciliation on, normalized SRCH-02/03 ranking, no `--album-preferred-search`, `--exact-match`, `--direct-api`, or `--retry-failed`. Treat legacy flags as unused unless you know you need them.
+
 ## One queue
 
 There is a **single canonical work queue**:
