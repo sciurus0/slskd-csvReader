@@ -11,8 +11,12 @@ import re
 from typing import Dict, Optional, Tuple
 
 _FEAT_PATTERN = re.compile(r"\b(?:feat\.?|featuring|ft\.?)\b", re.IGNORECASE)
+_COLLAB_LIST_SPLIT = re.compile(r"\s*[,;]\s*")
 _MATCH_PUNCT_PATTERN = re.compile(r"[^\w\s]", re.UNICODE)
 _MATCH_WS_PATTERN = re.compile(r"\s+")
+
+# Separator for ``artist_alternates`` column (pipe avoids CSV comma issues).
+ARTIST_ALTERNATES_SEP = " | "
 
 # Query strategies that search without album text — ranking should not require album in path.
 TRACK_FOCUSED_SEARCH_STRATEGIES = frozenset(
@@ -29,6 +33,19 @@ def normalize_artist_n1_primary_semicolon(artist: str) -> str:
     if not artist or ";" not in artist:
         return artist
     return artist.split(";", 1)[0].strip()
+
+
+def normalize_artist_n3_primary_comma(artist: str) -> str:
+    """
+    NORM-03 — Primary artist for comma-separated credit lists (merge column only).
+
+    ``Artist A, Artist B`` → ``Artist A``. Does not split on ``&`` or ``and`` so band
+    names like ``Nick Cave & The Bad Seeds`` stay intact (see ``split_artist_variants``
+    for search-time behavior; SRCH-03 may narrow that separately).
+    """
+    if not artist or "," not in artist:
+        return artist
+    return artist.split(",", 1)[0].strip()
 
 
 def normalize_artist_n2_strip_featuring(artist: str) -> str:
@@ -116,13 +133,55 @@ def path_matches_row(
     return match_ok, album_ok
 
 
+def split_artist_credits(artist: str) -> Tuple[str, str, str]:
+    """
+    Split sanitized artist credits for wide queue columns (NORM-03).
+
+    Returns (artist_full, artist_primary, artist_alternates).
+
+    - ``artist_full``: full credit string (unchanged).
+    - ``artist_primary``: first segment after feat. strip; split only on ``,`` / ``;``.
+    - ``artist_alternates``: remaining segments joined with ``ARTIST_ALTERNATES_SEP``.
+
+    Does not split on ``&`` or ``and`` (band names stay one segment).
+    """
+    full = (artist or "").strip()
+    if not full:
+        return "", "", ""
+
+    after_feat = normalize_artist_n2_strip_featuring(full)
+    parts = [p for p in _COLLAB_LIST_SPLIT.split(after_feat) if p and p.strip()]
+    if not parts:
+        return full, full, ""
+    if len(parts) == 1:
+        return full, parts[0].strip(), ""
+
+    primary = parts[0].strip()
+    alternates = ARTIST_ALTERNATES_SEP.join(p.strip() for p in parts[1:] if p.strip())
+    return full, primary, alternates
+
+
+def primary_artist_for_merge(artist: str) -> str:
+    """Primary artist for dedupe / default search (first credit segment)."""
+    _full, primary, _alternates = split_artist_credits(artist)
+    return primary or (artist or "").strip()
+
+
 def normalize_queue_row(row: Dict[str, str]) -> Dict[str, str]:
-    """Apply enabled normalization rules to a queue-shaped row (in place)."""
-    artist = row.get("artist", "")
+    """
+    Apply merge-time artist rules (in place).
+
+    Expects ``artist`` already sanitized. Preserves full credits in ``artist``;
+    sets ``artist_primary`` and ``artist_alternates`` for dedupe and future search tuning.
+    """
+    artist = (row.get("artist") or "").strip()
     if not artist:
+        row["artist_primary"] = ""
+        row["artist_alternates"] = ""
         return row
-    if ";" in artist:
-        artist = normalize_artist_n1_primary_semicolon(artist)
-    artist = normalize_artist_n2_strip_featuring(artist)
-    row["artist"] = artist
+
+    full, primary, alternates = split_artist_credits(artist)
+    row["artist"] = full
+    row["artist_primary"] = primary
+    row["artist_alternates"] = alternates
     return row

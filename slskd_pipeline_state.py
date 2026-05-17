@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from slskd_csv import atomic_write_pipeline_csv, decode_pipeline_text
+from slskd_normalize import primary_artist_for_merge
 
 MERGE_STATE_FILENAME = "merge_state.json"
 SUCCESS_LEDGER_FILENAME = "success_ledger.csv"
@@ -37,7 +38,7 @@ def pipeline_row_dedupe_key(row: Dict[str, str]) -> DedupeKey:
     track_id = (row.get("spotify_track_id") or "").strip()
     if track_id:
         return ("id", track_id.lower())
-    artist = (row.get("artist") or "").strip().lower()
+    artist = (row.get("artist_primary") or row.get("artist") or "").strip().lower()
     album = (row.get("album") or "").strip().lower()
     track = (row.get("track") or "").strip().lower()
     return ("triple", artist, album, track)
@@ -229,6 +230,8 @@ def load_ledger_keys(workspace: Path) -> Set[DedupeKey]:
                     {
                         "spotify_track_id": row.get("spotify_track_id", ""),
                         "artist": row.get("artist", ""),
+                        "artist_primary": row.get("artist_primary")
+                        or primary_artist_for_merge(row.get("artist", "")),
                         "album": row.get("album", ""),
                         "track": row.get("track", ""),
                     }
