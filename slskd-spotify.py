@@ -1,164 +1,9 @@
 #!/usr/bin/env python3
 """
-slskd-spotify.py — queue tracks from a pipeline CSV via the SLSKD HTTP API.
+Queue tracks from a pipeline CSV via the SLSKD HTTP API.
 
-Queue CSVs should come from ``merge_queue.py`` (sanitized wide ``data/to_queue.csv``).
-See ``docs/DEV_OPS.md`` for workspace layout, merge vs trim, and pending CSV behavior.
-
-Features: batch processing, checkpoint resume, bounded Soulseek query attempts,
-normalized path ranking (SRCH-02), optional alternate-artist search (SRCH-03),
-post-run download reconciliation (default 300s settle), pending retry CSV, ``--trim-queue``.
-
-API Key Loading:
-----------------
-This script requires an API key to access your SLSKD server. The key can be provided in one of these ways:
-
-1. Environment Variable (Recommended for CI/servers):
-   Set the environment variable `SLSKD_API_KEY` before running the script:
-       export SLSKD_API_KEY=your-api-key-here
-       python3 slskd-spotify.py
-
-2. api.txt File (Recommended for local use):
-   Create `api.txt` in the same directory as this script (repo root). Two supported layouts:
-
-   **Legacy:** one line, SLSKD API key only (no '=' or '[' in the file):
-       your-slskd-api-key-here
-
-   **INI (includes optional Spotify block used by spotify_playlist_fetch.py):**
-       [slskd]
-       api_key = your-slskd-api-key-here
-
-       [spotify]
-       client_id = ...
-       client_secret = ...
-       redirect_uri = http://127.0.0.1:8765/callback
-
-   Environment variables override values from api.txt when both are set.
-
-Security Notes:
-- The `api.txt` file is included in `.gitignore` and will not be committed to version control.
-- Never share your API keys or commit them to a public repository.
-- If neither `SLSKD_API_KEY` nor a readable key in api.txt is available, SLSKD requests will fail once used.
-
-Command-line Options:
-------------------
-  -h, --help            Show this help message and exit
-  
-  -c CSV, --csv CSV     Path to queue CSV (default: data/to_queue.csv)
-                        Wide columns: artist, artist_primary, artist_alternates,
-                        album, track, … — from merge_queue.py
-  
-  -r, --resume          Resume from last checkpoint
-                        Continues processing from where previous run stopped
-                        
-  --retry-failed, -rf   Only retry rows that failed in previous runs
-                        Uses the most recent results CSV file in the output directory
-  
-  -b N, --batch-size N  Number of rows to process in each batch (default: 10)
-                        Lower for less memory usage, higher for better performance
-  
-  -d SEC, --delay SEC   Delay between API calls in seconds (default: 1.0)
-                        Increase to avoid rate limiting or high server load
-  
-  -f EXT, --formats EXT [EXT ...]
-                        Allowed file formats in priority order (default: ['.mp3', '.m4a', '.flac'])
-                        Only these formats will be downloaded, in the order specified
-                        Files in formats not in this list will be ignored
-                        
-  -e EXT, --exclude EXT [EXT ...]
-                        File extensions to exclude entirely (default: ['.lrc'])
-                        These file types will never be downloaded
-                        
-  -o DIR, --output-dir DIR
-                        Log and results directory (default: data/logs)
-                        
-  --debug               Enable debug logging for more detailed output
-                        Includes API call details and file processing
-
-  --direct-api          Use direct API calls instead of client library
-                        May help when client library is having issues
-
-  --gen-report          Generate a report from existing checkpoint data
-                        Creates CSV reports without processing any new files
-                        Useful if you need to recreate reports
-
-  --reconcile-downloads Re-poll SLSKD and update download statuses from a past run
-                        Re-checks success rows too (fixes false positives). Uses
-                        checkpoint when available; else newest results CSV + import log
-
-  --reconcile-from-csv PATH
-                        Results CSV for --reconcile-downloads (default: newest in -o)
-
-  --reconcile-log PATH  Import log for tracked filenames (default: newest slskd_import_*.log)
-
-  --skip-pending-csv    Do not write <input>_pending.csv after a run
-  --pending-csv PATH    Override pending queue path (default: <input>_pending.csv)
-                        
-  --exact-match         Require exact artist-album-track matching instead of partial matching
-                        When enabled, only files with exact matches to the specified pattern are selected
-                        When disabled (default), files that contain the track name are selected
-
-  --album-preferred-search
-                        Use broader search with album preference and quality filtering
-                        Uses bounded query attempts (literal first, softened fallback) for better recall
-                        Prioritizes files where album appears in the path (directory or filename)
-                        Falls back to files without album match when no better option exists
-                        Automatically filters out unwanted versions (remixes, live, covers, etc.)
-                        unless explicitly requested in the search query
-                        Selection still uses strict ranking against artist/album/track metadata
-
-  --queue-limit N       Maximum items in queue per user (default: 0)
-                        Set to 0 for no limit
-                        Use to prevent overloading specific users' queues
-
-Examples:
---------
-  # Process the canonical queue (from repo root)
-  python3 slskd-spotify.py --csv data/to_queue.csv --trim-queue
-
-  # Resume after interrupt (uses data/checkpoint.pkl by default)
-  python3 slskd-spotify.py --resume
-
-  # Validate / regression slice (see fixtures/srch/)
-  python3 slskd-spotify.py --csv fixtures/srch/validate_input.csv --skip-pending-csv
-
-  # Retry failures from the latest results CSV in data/logs
-  python3 slskd-spotify.py --retry-failed
-  
-  # Change allowed formats and their priority
-  python3 slskd-spotify.py --formats .mp3 .flac
-  
-  # Change excluded file types
-  python3 slskd-spotify.py --exclude .lrc .nfo .m3u
-  
-  # Custom log directory under the workspace
-  python3 slskd-spotify.py --output-dir data/logs
-  
-  # Run with debug logging
-  python3 slskd-spotify.py --debug
-  
-  # Use direct API mode (bypass client library)
-  python3 slskd-spotify.py --direct-api
-  
-  # Generate reports from previous run
-  python3 slskd-spotify.py --gen-report
-
-  # Re-run download reconciliation only (no new searches/enqueues)
-  python slskd-spotify.py --reconcile-downloads
-
-  # Reconcile using explicit artifacts
-  python3 slskd-spotify.py --reconcile-downloads \\
-    --reconcile-from-csv data/logs/to_queue_results.csv \\
-    --reconcile-log data/logs/slskd_import_20260516_094029.log
-  
-  # Use exact matching for tracks
-  python3 slskd-spotify.py --exact-match
-  
-  # Use album-preferred search for higher success rate
-  python3 slskd-spotify.py --album-preferred-search
-  
-  # Set a queue limit of 50 items per user
-  python3 slskd-spotify.py --queue-limit 50
+Input: wide ``data/to_queue.csv`` from ``merge_queue.py``.
+Docs: ``README.md``, ``docs/DEV_OPS.md`` (golden path vs advanced flags).
 """
 
 import argparse
@@ -221,6 +66,185 @@ HEADERS = make_headers(API_KEY)
 stats = Stats()
 results_log = []  # To track detailed results for reporting
 queued_files_tracker = []  # Global list to track all queued files for status checking
+
+_GOLDEN_EPILOG = """
+Golden path (from repo root):
+  python3 slskd-spotify.py --trim-queue
+  python3 slskd-spotify.py --resume
+
+See docs/DEV_OPS.md for merge, trim, pending CSV, and legacy flags.
+"""
+
+
+def _build_argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Queue tracks from a merge_queue CSV via SLSKD",
+        epilog=_GOLDEN_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    golden = parser.add_argument_group("golden path")
+    golden.add_argument(
+        "--csv",
+        "-c",
+        default=CSV_FILE,
+        help=f"Queue CSV (default: {CSV_FILE})",
+    )
+    golden.add_argument(
+        "--resume",
+        "-r",
+        action="store_true",
+        help="Resume from checkpoint (default: data/checkpoint.pkl)",
+    )
+    golden.add_argument(
+        "--trim-queue",
+        action="store_true",
+        help="After run: rewrite input CSV minus success ledger (see trim_queue.py)",
+    )
+    golden.add_argument(
+        "--checkpoint-file",
+        default=CHECKPOINT_FILE,
+        help=f"Checkpoint pickle (default: {CHECKPOINT_FILE})",
+    )
+    golden.add_argument(
+        "--skip-pending-csv",
+        action="store_true",
+        help="Do not write <input>_pending.csv (e.g. validate runs)",
+    )
+    golden.add_argument(
+        "--pending-csv",
+        metavar="PATH",
+        default=None,
+        help="Pending failures CSV (default: <input-stem>_pending.csv)",
+    )
+
+    tuning = parser.add_argument_group("tuning")
+    tuning.add_argument(
+        "--batch-size",
+        "-b",
+        type=int,
+        default=BATCH_SIZE,
+        help=f"Rows per batch (default: {BATCH_SIZE})",
+    )
+    tuning.add_argument(
+        "--delay",
+        "-d",
+        type=float,
+        default=RATE_LIMIT_DELAY,
+        help=f"Delay between API calls in seconds (default: {RATE_LIMIT_DELAY})",
+    )
+    tuning.add_argument(
+        "--formats",
+        "-f",
+        nargs="+",
+        default=ALLOWED_FORMATS,
+        help=f"Allowed formats in priority order (default: {ALLOWED_FORMATS})",
+    )
+    tuning.add_argument(
+        "--exclude",
+        "-e",
+        nargs="+",
+        default=EXCLUDED_EXTENSIONS,
+        help=f"Excluded extensions (default: {EXCLUDED_EXTENSIONS})",
+    )
+    tuning.add_argument(
+        "--output-dir",
+        "-o",
+        default=DEFAULT_OUTPUT_DIR,
+        help=f"Logs and results directory (default: {DEFAULT_OUTPUT_DIR})",
+    )
+    tuning.add_argument("--debug", action="store_true", help="Debug logging")
+    tuning.add_argument(
+        "--queue-limit",
+        type=int,
+        default=QUEUE_LIMIT,
+        help=f"Max queue items per user, 0=unlimited (default: {QUEUE_LIMIT})",
+    )
+    tuning.add_argument(
+        "--download-settle-seconds",
+        type=float,
+        default=DEFAULT_DOWNLOAD_SETTLE_SECONDS,
+        help=(
+            "Wait after queue processing before download reconciliation "
+            f"(default: {DEFAULT_DOWNLOAD_SETTLE_SECONDS})"
+        ),
+    )
+    tuning.add_argument(
+        "--cleanup-ephemeral-csv",
+        action="store_true",
+        help="Remove ephemeral pending CSVs in workspace (or use pipeline_cleanup.py)",
+    )
+
+    recovery = parser.add_argument_group("recovery (past runs)")
+    recovery.add_argument(
+        "--reconcile-downloads",
+        action="store_true",
+        help="Re-poll SLSKD for download status only (no new searches)",
+    )
+    recovery.add_argument(
+        "--reconcile-from-csv",
+        metavar="PATH",
+        default=None,
+        help="Results CSV for --reconcile-downloads (default: newest in output dir)",
+    )
+    recovery.add_argument(
+        "--reconcile-log",
+        metavar="PATH",
+        default=None,
+        help="Import log for --reconcile-downloads (default: newest slskd_import_*.log)",
+    )
+    recovery.add_argument(
+        "--gen-report",
+        action="store_true",
+        help="Regenerate results CSV from checkpoint (no new processing)",
+    )
+    recovery.add_argument(
+        "--retry-failed",
+        "-rf",
+        action="store_true",
+        help="Retry rows that failed in the newest results CSV",
+    )
+
+    legacy = parser.add_argument_group("legacy (deprecated — avoid)")
+    legacy.add_argument(
+        "--skip-download-reconcile",
+        action="store_true",
+        help="[legacy] Enqueue-only; skip post-run download reconciliation",
+    )
+    legacy.add_argument(
+        "--direct-api",
+        action="store_true",
+        help="[legacy] HTTP API instead of slskd client library",
+    )
+    legacy.add_argument(
+        "--exact-match",
+        action="store_true",
+        help="[legacy] Exact path match; default ranking uses SRCH-02 normalization",
+    )
+    legacy.add_argument(
+        "--album-preferred-search",
+        action="store_true",
+        help="[legacy] Old album-preference mode; superseded by SRCH-02/03 query flow",
+    )
+    return parser
+
+
+def _warn_legacy_flags(args: argparse.Namespace) -> None:
+    """Log when deprecated CLI flags are used (see docs/DEV_OPS.md)."""
+    flagged = []
+    if args.skip_download_reconcile:
+        flagged.append("--skip-download-reconcile")
+    if args.direct_api:
+        flagged.append("--direct-api")
+    if args.exact_match:
+        flagged.append("--exact-match")
+    if args.album_preferred_search:
+        flagged.append("--album-preferred-search")
+    if flagged:
+        logger.warning(
+            "Legacy flag(s): %s — prefer default reconciliation and SRCH-02/03 ranking. "
+            "See docs/DEV_OPS.md.",
+            ", ".join(flagged),
+        )
 
 
 async def _run_reconcile_downloads_mode(args: argparse.Namespace) -> None:
@@ -287,99 +311,12 @@ async def main():
     global EXCLUDED_EXTENSIONS, ALLOWED_FORMATS, QUEUE_LIMIT
     global USE_DIRECT_API, EXACT_MATCH, ALBUM_PREFERRED_SEARCH
     
-    parser = argparse.ArgumentParser(description="Queue albums or tracks from CSV to SLSKD")
-    parser.add_argument(
-        "--csv",
-        "-c",
-        default=CSV_FILE,
-        help=f"Path to queue CSV (default: {CSV_FILE}; use merge_queue.py to build)",
-    )
-    parser.add_argument("--resume", "-r", action="store_true", help="Resume from last checkpoint")
-    parser.add_argument("--retry-failed", "-rf", action="store_true", 
-                        help="Only retry rows that failed in previous runs")
-    parser.add_argument("--batch-size", "-b", type=int, default=BATCH_SIZE, 
-                        help=f"Number of rows to process in each batch (default: {BATCH_SIZE})")
-    parser.add_argument("--delay", "-d", type=float, default=RATE_LIMIT_DELAY,
-                        help=f"Delay between API calls in seconds (default: {RATE_LIMIT_DELAY})")
-    parser.add_argument("--formats", "-f", nargs="+", default=ALLOWED_FORMATS,
-                        help=f"Allowed file formats in priority order (default: {ALLOWED_FORMATS})")
-    parser.add_argument("--exclude", "-e", nargs="+", default=EXCLUDED_EXTENSIONS,
-                        help=f"File extensions to exclude entirely (default: {EXCLUDED_EXTENSIONS})")
-    parser.add_argument("--output-dir", "-o", default=DEFAULT_OUTPUT_DIR,
-                        help=f"Directory for output files (default: {DEFAULT_OUTPUT_DIR})")
-    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
-    parser.add_argument("--direct-api", action="store_true", help="Use direct API calls instead of client library")
-    parser.add_argument("--gen-report", action="store_true", help="Generate a report without processing new files")
-    parser.add_argument("--exact-match", action="store_true", help="Require exact artist-album-track matching")
-    parser.add_argument("--album-preferred-search", action="store_true",
-                        help="Use broader search (Artist-Track) with album preference and quality filtering")
-    parser.add_argument("--queue-limit", type=int, default=QUEUE_LIMIT,
-                        help="Maximum items in queue per user (0 for no limit, default: 0)")
-    parser.add_argument(
-        "--download-settle-seconds",
-        type=float,
-        default=DEFAULT_DOWNLOAD_SETTLE_SECONDS,
-        help=(
-            "Seconds to wait after the queue CSV is processed before polling SLSKD "
-            f"for download completion (default: {DEFAULT_DOWNLOAD_SETTLE_SECONDS})"
-        ),
-    )
-    parser.add_argument(
-        "--skip-download-reconcile",
-        action="store_true",
-        help="Skip post-run settle wait and download reconciliation (enqueue-only, legacy behavior)",
-    )
-    parser.add_argument(
-        "--reconcile-downloads",
-        action="store_true",
-        help="Re-poll SLSKD and update download statuses from a past run (no CSV processing)",
-    )
-    parser.add_argument(
-        "--reconcile-from-csv",
-        metavar="PATH",
-        default=None,
-        help="Results CSV for --reconcile-downloads (default: newest in output dir)",
-    )
-    parser.add_argument(
-        "--reconcile-log",
-        metavar="PATH",
-        default=None,
-        help="Import log with enqueue lines for --reconcile-downloads (default: newest in output dir)",
-    )
-    parser.add_argument(
-        "--checkpoint-file",
-        default=CHECKPOINT_FILE,
-        help=f"Checkpoint pickle path (default: {CHECKPOINT_FILE})",
-    )
-    parser.add_argument(
-        "--skip-pending-csv",
-        action="store_true",
-        help="Do not write a pending retry queue CSV after the run",
-    )
-    parser.add_argument(
-        "--pending-csv",
-        metavar="PATH",
-        default=None,
-        help="Pending retry queue path (default: <input-stem>_pending.csv beside input)",
-    )
-    parser.add_argument(
-        "--trim-queue",
-        action="store_true",
-        help="After reconciliation and ledger update, rewrite input CSV minus ledger keys (see trim_queue.py)",
-    )
-    parser.add_argument(
-        "--cleanup-ephemeral-csv",
-        action="store_true",
-        help=(
-            "After the run, remove to_queue_pending_validate.csv and to_queue_pending.csv "
-            "from the input CSV's workspace (validate slice is always removed when used as input)"
-        ),
-    )
+    parser = _build_argument_parser()
     args = parser.parse_args()
-    
-    # Setup logging based on debug flag (also creates output dir and sets log_dir)
+
     log_level = logging.DEBUG if args.debug else logging.INFO
     _, log_dir = setup_logging(log_level, args.output_dir)
+    _warn_legacy_flags(args)
     
     # Update global configuration based on arguments
     CSV_FILE = args.csv
