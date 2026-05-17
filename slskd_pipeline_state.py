@@ -24,6 +24,7 @@ UNKNOWN_PLAYLIST_KEY = "_unknown"
 SUCCESS_LEDGER_COLUMNS: Tuple[str, ...] = (
     "spotify_track_id",
     "artist",
+    "artist_primary",
     "album",
     "track",
     "completed_at",
@@ -33,12 +34,45 @@ SUCCESS_LEDGER_COLUMNS: Tuple[str, ...] = (
 DedupeKey = Tuple[str, ...]
 
 
+def ledger_identity_artist(row: Dict[str, str]) -> str:
+    """Artist token for dedupe / ledger keys (NORM-06: ``artist_primary`` when set)."""
+    return (
+        (row.get("artist_primary") or "").strip()
+        or primary_artist_for_merge((row.get("artist") or "").strip())
+    )
+
+
+def normalize_ledger_row(row: Dict[str, str]) -> Dict[str, str]:
+    """Ensure ledger CSV shape including ``artist_primary`` (backfill for legacy rows)."""
+    artist = (row.get("artist") or "").strip()
+    primary = (row.get("artist_primary") or "").strip() or primary_artist_for_merge(artist)
+    return {
+        "spotify_track_id": (row.get("spotify_track_id") or "").strip(),
+        "artist": artist,
+        "artist_primary": primary,
+        "album": (row.get("album") or "").strip(),
+        "track": (row.get("track") or "").strip(),
+        "completed_at": (row.get("completed_at") or "").strip(),
+        "playlist_id": (row.get("playlist_id") or "").strip(),
+    }
+
+
+def export_row_eligible_for_merge(row: Dict[str, str]) -> bool:
+    """
+    NORM-05 — whether an export row may enter the merge queue.
+
+    Episodes are omitted at Spotify fetch (``spotify_playlist_fetch``). All remaining
+    music rows are eligible regardless of ``is_unavailable`` or playability.
+    """
+    return True
+
+
 def pipeline_row_dedupe_key(row: Dict[str, str]) -> DedupeKey:
-    """Hybrid identity: Spotify track id when present, else sanitized (artist, album, track)."""
+    """Hybrid identity: Spotify track id when present, else (artist_primary, album, track)."""
     track_id = (row.get("spotify_track_id") or "").strip()
     if track_id:
         return ("id", track_id.lower())
-    artist = (row.get("artist_primary") or row.get("artist") or "").strip().lower()
+    artist = ledger_identity_artist(row).lower()
     album = (row.get("album") or "").strip().lower()
     track = (row.get("track") or "").strip().lower()
     return ("triple", artist, album, track)
@@ -166,6 +200,8 @@ def filter_export_for_merge(
     kept: List[Dict[str, str]] = []
 
     for row in export_rows:
+        if not export_row_eligible_for_merge(row):
+            continue
         if not row_passes_watermark(row, merge_state, force_full_import=force_full_import):
             stats.skipped_watermark += 1
             continue
@@ -225,18 +261,7 @@ def load_ledger_keys(workspace: Path) -> Set[DedupeKey]:
     try:
         text = decode_pipeline_text(path.read_bytes())
         for row in csv.DictReader(StringIO(text)):
-            keys.add(
-                pipeline_row_dedupe_key(
-                    {
-                        "spotify_track_id": row.get("spotify_track_id", ""),
-                        "artist": row.get("artist", ""),
-                        "artist_primary": row.get("artist_primary")
-                        or primary_artist_for_merge(row.get("artist", "")),
-                        "album": row.get("album", ""),
-                        "track": row.get("track", ""),
-                    }
-                )
-            )
+            keys.add(pipeline_row_dedupe_key(normalize_ledger_row(row)))
     except (OSError, UnicodeDecodeError):
         return set()
     return keys
@@ -260,14 +285,17 @@ def append_success_ledger(
             continue
         existing_keys.add(key)
         to_write.append(
-            {
-                "spotify_track_id": row.get("spotify_track_id", ""),
-                "artist": row.get("artist", ""),
-                "album": row.get("album", ""),
-                "track": row.get("track", ""),
-                "completed_at": row.get("completed_at", ""),
-                "playlist_id": row.get("playlist_id", ""),
-            }
+            normalize_ledger_row(
+                {
+                    "spotify_track_id": row.get("spotify_track_id", ""),
+                    "artist": row.get("artist", ""),
+                    "artist_primary": row.get("artist_primary", ""),
+                    "album": row.get("album", ""),
+                    "track": row.get("track", ""),
+                    "completed_at": row.get("completed_at", ""),
+                    "playlist_id": row.get("playlist_id", ""),
+                }
+            )
         )
 
     if not to_write:
@@ -275,7 +303,7 @@ def append_success_ledger(
 
     if path.is_file():
         text = decode_pipeline_text(path.read_bytes())
-        prior = list(csv.DictReader(StringIO(text)))
+        prior = [normalize_ledger_row(row) for row in csv.DictReader(StringIO(text))]
         combined = prior + to_write
     else:
         combined = to_write
@@ -293,15 +321,19 @@ def success_rows_from_results_log(
     for entry in results_log:
         if (entry.get("status") or "").lower() != "success":
             continue
+        artist = str(entry.get("artist") or "")
         out.append(
-            {
-                "spotify_track_id": str(entry.get("spotify_track_id") or ""),
-                "artist": str(entry.get("artist") or ""),
-                "album": str(entry.get("album") or ""),
-                "track": str(entry.get("track") or ""),
-                "completed_at": str(entry.get("completed_at") or now),
-                "playlist_id": str(entry.get("playlist_id") or ""),
-            }
+            normalize_ledger_row(
+                {
+                    "spotify_track_id": str(entry.get("spotify_track_id") or ""),
+                    "artist": artist,
+                    "artist_primary": str(entry.get("artist_primary") or ""),
+                    "album": str(entry.get("album") or ""),
+                    "track": str(entry.get("track") or ""),
+                    "completed_at": str(entry.get("completed_at") or now),
+                    "playlist_id": str(entry.get("playlist_id") or ""),
+                }
+            )
         )
     return out
 
