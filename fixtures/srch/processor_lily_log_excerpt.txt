@@ -1,0 +1,14 @@
+# Excerpt from data/logs/slskd_import_20260517_081520.log (row 8/10, validate slice)
+# SRCH-06 fixture: many Soulseek responses, zero ranked candidates (spaced title)
+
+2026-05-17 08:19:44,068 INFO: 🔍 Searching for: Processor L I L Y (artist_track/literal) (8/10)
+2026-05-17 08:19:44,068 INFO: ⬢ POST http://localhost:5030/api/v0/searches payload: {'SearchText': 'Processor L I L Y'}
+2026-05-17 08:19:47,090 INFO: Search complete: 247 response(s) fetched, state='Completed, ResponseLimitReached', responseCount=250
+2026-05-17 08:19:47,094 INFO: No valid candidates found
+2026-05-17 08:19:47,094 INFO: No valid candidates for query attempt 1: Processor L I L Y
+2026-05-17 08:19:47,094 INFO: 🔍 Searching for: Processor L I L Y L I L Y (artist_album_track/literal) (8/10)
+2026-05-17 08:19:47,094 INFO: ⬢ POST http://localhost:5030/api/v0/searches payload: {'SearchText': 'Processor L I L Y L I L Y'}
+2026-05-17 08:19:48,113 INFO: Search complete: 248 response(s) fetched, state='Completed, ResponseLimitReached', responseCount=250
+2026-05-17 08:19:48,118 INFO: No valid candidates found
+2026-05-17 08:19:48,118 INFO: No valid candidates for query attempt 2: Processor L I L Y L I L Y
+2026-05-17 08:19:48,118 INFO: No valid candidates found across all query attempts

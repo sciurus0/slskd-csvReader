@@ -116,7 +116,7 @@ MAX_POLLS = 20
 SOURCE = "HeadphonesVip"
 
 # After the queue CSV is fully processed, wait before polling SLSKD transfer state.
-DEFAULT_DOWNLOAD_SETTLE_SECONDS = 600
+DEFAULT_DOWNLOAD_SETTLE_SECONDS = 300
 
 
 def make_headers(api_key: str) -> Dict[str, Any]:

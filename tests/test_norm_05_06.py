@@ -6,6 +6,7 @@ import unittest
 
 from slskd_pipeline_state import (
     append_success_ledger,
+    backfill_success_ledger,
     export_row_eligible_for_merge,
     filter_export_for_merge,
     ledger_identity_artist,
@@ -114,6 +115,31 @@ class TestNorm06LedgerIdentity(unittest.TestCase):
                 }
             )
             self.assertIn(queue_key, keys)
+
+    def test_backfill_adds_artist_primary_column(self) -> None:
+        import csv
+        import tempfile
+        from io import StringIO
+        from pathlib import Path
+
+        from slskd_csv import decode_pipeline_text
+        from slskd_pipeline_state import SUCCESS_LEDGER_COLUMNS
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            path = workspace / "success_ledger.csv"
+            path.write_text(
+                "spotify_track_id,artist,album,track,completed_at,playlist_id\n"
+                ',\"Michael Wilbur, Tonio Sagan\",Victory,Victory,2026-05-17T12:00:00Z,\n',
+                encoding="utf-8",
+            )
+            rows_in, rows_out = backfill_success_ledger(workspace, dry_run=False)
+            self.assertEqual(rows_in, 1)
+            self.assertEqual(rows_out, 1)
+            text = decode_pipeline_text(path.read_bytes())
+            rows = list(csv.DictReader(StringIO(text)))
+            self.assertEqual(list(rows[0].keys()), list(SUCCESS_LEDGER_COLUMNS))
+            self.assertEqual(rows[0]["artist_primary"], "Michael Wilbur")
 
 
 if __name__ == "__main__":

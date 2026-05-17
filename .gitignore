@@ -13,6 +13,7 @@ PROJECT_PLAN.md
 
 # CSV pipeline data (exports, queues, reports — not tracked)
 *.csv
+!fixtures/**/*.csv
 
 # Cross-run merge watermarks (ledger is *.csv)
 merge_state.json
