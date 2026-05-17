@@ -9,7 +9,7 @@ Steps (local calendar date ``YYYYMMDD``):
 3. Filter export rows by per-playlist ``added_at`` watermarks (``merge_state.json``) and
    ``success_ledger.csv`` unless ``--force-full-import``.
 4. Load backup rows, then append filtered Spotify export rows (existing queue first).
-5. Normalize ``artist`` (Track B N1: primary before ``;``), then sanitize names; pass through
+5. Sanitize names, then NORM artist (full credits + ``artist_primary`` + ``artist_alternates``); pass through
    ``duration_ms``, ``spotify_track_id``, ``is_unavailable`` when present.
 6. Dedupe with hybrid key: ``spotify_track_id`` when set, else sanitized (artist, album, track).
    Queue rows win; duplicate export rows are skipped.
@@ -53,6 +53,8 @@ QUEUE_FILENAME = "to_queue.csv"
 # Wide queue contract (Track A). Extra export columns (disc_number, added_at, …) are not stored yet.
 QUEUE_CSV_COLUMNS: Tuple[str, ...] = (
     "artist",
+    "artist_primary",
+    "artist_alternates",
     "album",
     "track",
     "duration_ms",
@@ -101,15 +103,26 @@ def _boolish_field(raw: str) -> str:
 
 
 def _sanitize_pipeline_row(row: Dict[str, str]) -> Dict[str, str]:
-    """Normalize (Track B), then file hygiene on names; pass through identity fields."""
-    row = normalize_queue_row(dict(row))
+    """Sanitize names, then NORM artist credits; pass through identity fields."""
+    prepared = normalize_queue_row(
+        {
+            "artist": sanitize_queue_field(row.get("artist", "")),
+            "album": row.get("album", ""),
+            "track": row.get("track", ""),
+            "duration_ms": (row.get("duration_ms") or "").strip(),
+            "spotify_track_id": (row.get("spotify_track_id") or "").strip(),
+            "is_unavailable": row.get("is_unavailable", ""),
+        }
+    )
     return {
-        "artist": sanitize_queue_field(row.get("artist", "")),
-        "album": sanitize_queue_field(row.get("album", "")),
-        "track": sanitize_queue_field(row.get("track", "")),
-        "duration_ms": (row.get("duration_ms") or "").strip(),
-        "spotify_track_id": (row.get("spotify_track_id") or "").strip(),
-        "is_unavailable": _boolish_field(row.get("is_unavailable", "")),
+        "artist": prepared["artist"],
+        "artist_primary": prepared.get("artist_primary", ""),
+        "artist_alternates": prepared.get("artist_alternates", ""),
+        "album": sanitize_queue_field(prepared.get("album", "")),
+        "track": sanitize_queue_field(prepared.get("track", "")),
+        "duration_ms": prepared.get("duration_ms", ""),
+        "spotify_track_id": prepared.get("spotify_track_id", ""),
+        "is_unavailable": _boolish_field(prepared.get("is_unavailable", "")),
     }
 
 

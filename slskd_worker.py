@@ -295,12 +295,15 @@ async def process_row(client, row, row_index, total_rows):
     )
 
     # Rows are expected to be sanitized when written by merge_queue.py (to_queue.csv).
-    artist = (row.get("artist") or "").strip()
+    artist_full = (row.get("artist") or "").strip()
+    artist = (row.get("artist_primary") or artist_full).strip()
     album = (row.get("album") or "").strip()
     track = (row.get("track") or "").strip()
 
-    if any(ord(c) > 127 for c in artist + album + track):
-        logger.info(f"Unicode in row {row_index}: artist={artist!r} album={album!r} track={track!r}")
+    if any(ord(c) > 127 for c in artist_full + album + track):
+        logger.info(
+            f"Unicode in row {row_index}: artist={artist_full!r} album={album!r} track={track!r}"
+        )
 
     if not artist:
         result_entry["message"] = "Missing artist (required)"
