@@ -31,7 +31,12 @@ from slskd_queue import (
     snapshot_queued_files_tracker,
     wait_and_reconcile_downloads,
 )
-from slskd_query import build_query_candidates
+from slskd_query import (
+    DEFAULT_MAX_QUERY_ATTEMPTS,
+    build_query_candidates,
+    enqueue_pick_score,
+    is_solid_enqueue_pick,
+)
 from slskd_pipeline_state import record_successful_downloads
 from slskd_search import detect_search_intent, rank_all_results, search_slskd_async
 
@@ -298,7 +303,12 @@ async def process_row(client, row, row_index, total_rows):
         except (TypeError, ValueError):
             target_duration_ms = None
 
-    query_candidates = build_query_candidates(artist=artist, album=album, track=track, max_candidates=3)
+    query_candidates = build_query_candidates(
+        artist=artist,
+        album=album,
+        track=track,
+        max_query_attempts=DEFAULT_MAX_QUERY_ATTEMPTS,
+    )
     if not query_candidates:
         result_entry["message"] = "No valid search query could be generated"
         _results_log.append(result_entry)
@@ -307,8 +317,10 @@ async def process_row(client, row, row_index, total_rows):
     try:
         files_queued = 0
         search_intent = detect_search_intent(artist, album or "", track or "")
-        ranked_candidates = []
+        ranked_candidates: List[Dict[str, Any]] = []
         rejection_reasons: List[str] = []
+        selected_pick: Optional[Dict[str, Any]] = None
+        best_weak_attempt: Optional[Dict[str, Any]] = None
 
         for attempt_idx, candidate in enumerate(query_candidates, start=1):
             query = str(candidate["query"])
@@ -324,21 +336,89 @@ async def process_row(client, row, row_index, total_rows):
                 logger.info(f"No results for query attempt {attempt_idx}: {query}")
                 continue
 
-            ranked_candidates, rejection_reasons = rank_all_results(
+            attempt_ranked, rejection_reasons = rank_all_results(
                 resp_list,
                 artist,
                 album if album else None,
                 track if track else None,
                 search_intent,
                 target_duration_ms=target_duration_ms,
+                search_strategy=strategy,
             )
-            if ranked_candidates:
+            if not attempt_ranked:
+                logger.info(f"No valid candidates for query attempt {attempt_idx}: {query}")
+                continue
+
+            if track:
+                attempt_pick = await find_best_available_candidate(attempt_ranked)
+            else:
+                attempt_pick = attempt_ranked[0]
+
+            attempt_state = {
+                "ranked": attempt_ranked,
+                "pick": attempt_pick,
+                "query": query,
+                "strategy": strategy,
+                "variant": variant,
+                "attempt_idx": attempt_idx,
+            }
+
+            if attempt_pick and is_solid_enqueue_pick(
+                attempt_pick,
+                album=album,
+                track=track,
+                search_strategy=strategy,
+                album_preferred_search=_album_preferred_search,
+            ):
+                ranked_candidates = attempt_ranked
+                selected_pick = attempt_pick
                 result_entry["search_query_used"] = query
                 result_entry["search_strategy"] = strategy
                 result_entry["search_variant"] = variant
                 result_entry["fallback_used"] = attempt_idx > 1
+                logger.info(
+                    "Solid enqueue pick on query attempt %s (%s); skipping remaining queries",
+                    attempt_idx,
+                    strategy,
+                )
                 break
-            logger.info(f"No valid candidates for query attempt {attempt_idx}: {query}")
+
+            if best_weak_attempt is None or enqueue_pick_score(
+                attempt_pick, attempt_ranked
+            ) > enqueue_pick_score(
+                best_weak_attempt.get("pick"), best_weak_attempt["ranked"]
+            ):
+                best_weak_attempt = attempt_state
+
+            remaining = len(query_candidates) - attempt_idx
+            if remaining:
+                logger.info(
+                    "No solid enqueue pick on query attempt %s (%s); "
+                    "%s more query attempt(s) available",
+                    attempt_idx,
+                    strategy,
+                    remaining,
+                )
+            else:
+                logger.info(
+                    "No solid enqueue pick on query attempt %s (%s); "
+                    "using best weak match from prior attempts",
+                    attempt_idx,
+                    strategy,
+                )
+
+        if not ranked_candidates and best_weak_attempt:
+            ranked_candidates = best_weak_attempt["ranked"]
+            selected_pick = best_weak_attempt.get("pick")
+            result_entry["search_query_used"] = best_weak_attempt["query"]
+            result_entry["search_strategy"] = best_weak_attempt["strategy"]
+            result_entry["search_variant"] = best_weak_attempt["variant"]
+            result_entry["fallback_used"] = best_weak_attempt["attempt_idx"] > 1
+            logger.info(
+                "Using best weak match from query attempt %s (%s)",
+                best_weak_attempt["attempt_idx"],
+                best_weak_attempt["strategy"],
+            )
 
         if not ranked_candidates:
             result_entry["status"] = "failed"
@@ -375,7 +455,9 @@ async def process_row(client, row, row_index, total_rows):
                 _results_log.append(result_entry)
                 return False
         else:
-            best_candidate = await find_best_available_candidate(ranked_candidates)
+            best_candidate = selected_pick
+            if not best_candidate:
+                best_candidate = await find_best_available_candidate(ranked_candidates)
             if not best_candidate:
                 result_entry["status"] = "failed"
                 result_entry["message"] = "No candidates with open queue slots found"
