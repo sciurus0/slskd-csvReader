@@ -31,11 +31,10 @@ import argparse
 import csv
 import shutil
 import sys
-from io import StringIO
 from pathlib import Path
 from typing import Dict, Iterable, List, Set, Tuple
 
-from slskd_csv import atomic_write_pipeline_csv, decode_pipeline_text
+from slskd_csv import atomic_write_pipeline_csv, read_pipeline_csv_with_fieldnames
 from slskd_pipeline_state import (
     advance_watermarks_from_export,
     filter_export_for_merge,
@@ -148,10 +147,8 @@ def load_queue_csv(path: Path) -> List[Dict[str, str]]:
 
 
 def _load_queue_rows(path: Path) -> List[Dict[str, str]]:
-    text = decode_pipeline_text(Path(path).read_bytes())
-    dr = csv.DictReader(StringIO(text))
-    raw_rows = list(dr)
-    _validate_headers(dr.fieldnames)
+    fieldnames, raw_rows = read_pipeline_csv_with_fieldnames(path)
+    _validate_headers(fieldnames)
     out: List[Dict[str, str]] = []
     for row in raw_rows:
         n = _norm_keys(row)
@@ -177,10 +174,8 @@ def _load_queue_rows(path: Path) -> List[Dict[str, str]]:
 
 def _load_export_rows(path: Path) -> List[Dict[str, str]]:
     """Load export CSV rows with ``playlist_id`` and ``added_at`` for merge filtering."""
-    text = decode_pipeline_text(Path(path).read_bytes())
-    dr = csv.DictReader(StringIO(text))
-    raw_rows = list(dr)
-    _validate_headers(dr.fieldnames)
+    fieldnames, raw_rows = read_pipeline_csv_with_fieldnames(path)
+    _validate_headers(fieldnames)
     out: List[Dict[str, str]] = []
     for row in raw_rows:
         n = _norm_keys(row)

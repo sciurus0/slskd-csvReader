@@ -93,7 +93,7 @@ API_KEY = (
     or "your-api-key-here"
 )
 
-CSV_FILE = "to_queue.csv"
+CSV_FILE = "data/to_queue.csv"
 QUEUE_LIMIT = 0
 
 RATE_LIMIT_DELAY = 1.0
@@ -101,7 +101,7 @@ BATCH_SIZE = 10
 MAX_RETRIES = 3
 SEARCH_TIMEOUT = 60
 ENQUEUE_TIMEOUT = 30
-CHECKPOINT_FILE = "checkpoint.pkl"
+CHECKPOINT_FILE = "data/checkpoint.pkl"
 EXCLUDED_EXTENSIONS = [".lrc"]
 CIRCUIT_BREAKER_THRESHOLD = 5
 CIRCUIT_BREAKER_TIMEOUT = 300
