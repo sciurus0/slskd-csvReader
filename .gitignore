@@ -13,9 +13,6 @@ PROJECT_PLAN.md
 # Cross-run merge watermarks (ledger is *.csv)
 merge_state.json
 
-# Local throwaway / diagnostic scripts (not maintained)
-rebuild_queue_once.py
-
 # Python bytecode (keep repo to source only)
 __pycache__/
 *.py[cod]

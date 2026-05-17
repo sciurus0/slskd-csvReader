@@ -126,6 +126,11 @@ def _export_row_to_queue_shape(row: Dict[str, str]) -> Dict[str, str]:
     )
 
 
+def load_queue_csv(path: Path) -> List[Dict[str, str]]:
+    """Load wide ``to_queue.csv`` rows with NORM + sanitize (same as merge)."""
+    return _load_queue_rows(path)
+
+
 def _load_queue_rows(path: Path) -> List[Dict[str, str]]:
     text = decode_pipeline_text(Path(path).read_bytes())
     dr = csv.DictReader(StringIO(text))

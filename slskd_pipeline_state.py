@@ -177,6 +177,45 @@ def filter_export_for_merge(
     return kept, stats
 
 
+@dataclass
+class TrimQueueStats:
+    """Counts from trimming ``to_queue.csv`` against the success ledger."""
+
+    rows_in: int = 0
+    skipped_ledger: int = 0
+    skipped_duplicate: int = 0
+    rows_out: int = 0
+    ledger_key_count: int = 0
+
+
+def trim_queue_rows(
+    rows: List[Dict[str, str]],
+    ledger_keys: Set[DedupeKey],
+) -> Tuple[List[Dict[str, str]], TrimQueueStats]:
+    """
+    Drop rows whose dedupe key is in the success ledger; dedupe remaining (first wins).
+
+    Expects queue-shaped rows (same keys as ``to_queue.csv``).
+    """
+    stats = TrimQueueStats(rows_in=len(rows), ledger_key_count=len(ledger_keys))
+    seen: Set[DedupeKey] = set()
+    kept: List[Dict[str, str]] = []
+
+    for row in rows:
+        key = pipeline_row_dedupe_key(row)
+        if key in ledger_keys:
+            stats.skipped_ledger += 1
+            continue
+        if key in seen:
+            stats.skipped_duplicate += 1
+            continue
+        seen.add(key)
+        kept.append(row)
+
+    stats.rows_out = len(kept)
+    return kept, stats
+
+
 def load_ledger_keys(workspace: Path) -> Set[DedupeKey]:
     path = success_ledger_path(workspace)
     if not path.is_file():
