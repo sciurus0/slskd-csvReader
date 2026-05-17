@@ -12,7 +12,7 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Optional, Tuple
 
-DEFAULT_OUTPUT_DIR = "logs"
+DEFAULT_OUTPUT_DIR = "data/logs"
 
 logger = logging.getLogger(__name__)
 

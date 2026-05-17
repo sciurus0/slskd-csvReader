@@ -794,7 +794,7 @@ def main() -> None:
         "-o",
         "--output",
         default=None,
-        help="Output CSV path (default: <cwd>/YYYYMMDD-spotify-export.csv, today's local date)",
+        help="Output CSV path (default: data/exports/YYYYMMDD-spotify-export.csv)",
     )
     parser.add_argument(
         "--list-playlists",
