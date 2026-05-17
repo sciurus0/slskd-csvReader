@@ -20,7 +20,7 @@ Pipeline CSVs must be UTF-8 (optional BOM). No transcoding.
 Usage::
 
     python3 merge_queue.py
-    python3 merge_queue.py --workspace /path/to/repo
+    python3 merge_queue.py --workspace data
     python3 merge_queue.py --date 20260510 --dry-run
     python3 merge_queue.py --force-full-import
 """
@@ -47,8 +47,13 @@ from slskd_pipeline_state import (
 from slskd_export_paths import parse_export_date, resolve_spotify_export
 from slskd_normalize import normalize_album_track_n4, normalize_queue_row
 from slskd_sanitize import sanitize_queue_field
-
-QUEUE_FILENAME = "to_queue.csv"
+from slskd_workspace import (
+    QUEUE_FILENAME,
+    archive_csv_path,
+    ensure_workspace_layout,
+    queue_csv_path,
+    resolve_workspace,
+)
 
 # Wide queue contract (Track A). Extra export columns (disc_number, added_at, …) are not stored yet.
 QUEUE_CSV_COLUMNS: Tuple[str, ...] = (
@@ -242,8 +247,8 @@ def main() -> None:
     parser.add_argument(
         "--workspace",
         type=Path,
-        default=Path.cwd(),
-        help="Directory containing queue and export files (default: current directory)",
+        default=None,
+        help="Pipeline data directory (default: ./data/, or cwd if legacy flat layout)",
     )
     parser.add_argument(
         "--date",
@@ -268,7 +273,7 @@ def main() -> None:
         "--backup",
         type=Path,
         default=None,
-        help="Backup path for existing queue (default: <workspace>/<DATE>-to_queue.csv)",
+        help="Backup path for existing queue (default: archive/csv-<DATE>/<DATE>-to_queue.csv)",
     )
     parser.add_argument(
         "--force-full-import",
@@ -282,7 +287,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    workspace = args.workspace.resolve()
+    workspace = resolve_workspace(args.workspace)
+    ensure_workspace_layout(workspace)
 
     try:
         spotify_path, date_str = resolve_spotify_export(
@@ -294,9 +300,11 @@ def main() -> None:
         _die(f"Spotify export not found (required): {e}")
     except ValueError as e:
         _die(str(e))
-    queue_path = args.queue.resolve() if args.queue else workspace / QUEUE_FILENAME
+    queue_path = args.queue.resolve() if args.queue else queue_csv_path(workspace)
     backup_path = (
-        args.backup.resolve() if args.backup else workspace / f"{date_str}-to_queue.csv"
+        args.backup.resolve()
+        if args.backup
+        else archive_csv_path(workspace, date_str, f"{date_str}-to_queue.csv")
     )
 
     if not spotify_path.is_file():
