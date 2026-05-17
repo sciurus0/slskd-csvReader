@@ -18,11 +18,11 @@ import argparse
 import os
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from slskd_config import load_api_txt
+from slskd_export_paths import default_new_export_path, parse_export_date
 
 from spotify_playlist_fetch import (
     DEFAULT_REDIRECT_URI,
@@ -166,7 +166,7 @@ def main() -> None:
         "--date",
         metavar="YYYYMMDD",
         default=None,
-        help="Calendar date for filenames (default: today, local)",
+        help="Date prefix for new export file (default: today). merge_queue reads that file.",
     )
     parser.add_argument(
         "--force-full-import",
@@ -227,11 +227,12 @@ def main() -> None:
     if not workspace.is_dir():
         _die(f"Workspace is not a directory: {workspace}")
 
-    date_str = args.date or datetime.now().strftime("%Y%m%d")
-    if len(date_str) != 8 or not date_str.isdigit():
-        _die("--date must be YYYYMMDD")
-
-    export_path = workspace / f"{date_str}-spotify-export.csv"
+    try:
+        export_path, date_str = default_new_export_path(
+            workspace, parse_export_date(args.date) if args.date else None
+        )
+    except ValueError as e:
+        _die(f"--date {e}")
     queue_path = workspace / "to_queue.csv"
 
     file_secrets = load_api_txt()
@@ -291,7 +292,12 @@ def main() -> None:
     row_count = export_playlists(access_token, playlists, pick_indices, export_path)
     print(f"Wrote {row_count} rows to {export_path}", file=sys.stderr)
 
-    merge_args = ["--workspace", str(workspace), "--date", date_str]
+    merge_args = [
+        "--workspace",
+        str(workspace),
+        "--spotify-export",
+        str(export_path),
+    ]
     if args.force_full_import:
         merge_args.append("--force-full-import")
     if args.dry_run:
