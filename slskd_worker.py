@@ -4,18 +4,16 @@ CSV batch processing and row workflow for the slskd-spotify script.
 
 from __future__ import annotations
 
-import csv
 import os
 import sys
 import time
 from datetime import datetime
-from io import StringIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from slskd_config import ALBUM_PREFERRED_SEARCH as _CONFIG_ALBUM_PREF
 from slskd_csv import (
-    decode_pipeline_text,
+    read_pipeline_csv_rows,
     generate_report,
     find_most_recent_results_csv,
     load_failed_rows,
@@ -589,12 +587,11 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
         logger.info(f"Retry mode: Processing {total_rows} failed rows from previous run")
     else:
         try:
-            raw_bytes = Path(csv_file).read_bytes()
-            text = decode_pipeline_text(raw_bytes)
+            all_rows = read_pipeline_csv_rows(csv_file)
         except UnicodeDecodeError as e:
             logger.error(
                 "CSV must be UTF-8 (optional BOM). Re-export or run merge_queue.py to rebuild "
-                "to_queue.csv: %s (%s)",
+                "the queue CSV: %s (%s)",
                 csv_file,
                 e,
             )
@@ -602,8 +599,6 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
         except OSError as e:
             logger.error("Could not read CSV file %s: %s", csv_file, e)
             sys.exit(1)
-
-        all_rows = list(csv.DictReader(StringIO(text)))
         total_rows = len(all_rows)
         if total_rows == 0:
             logger.error("CSV file has no data rows (UTF-8): %s", csv_file)
