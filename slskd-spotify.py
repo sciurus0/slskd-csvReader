@@ -368,6 +368,11 @@ async def main():
         default=None,
         help="Pending retry queue path (default: <input-stem>_pending.csv beside input)",
     )
+    parser.add_argument(
+        "--trim-queue",
+        action="store_true",
+        help="After reconciliation and ledger update, rewrite input CSV minus ledger keys (see trim_queue.py)",
+    )
     args = parser.parse_args()
     
     # Setup logging based on debug flag (also creates output dir and sets log_dir)
@@ -470,6 +475,7 @@ async def main():
         skip_download_reconcile=args.skip_download_reconcile,
         write_pending_csv=not args.skip_pending_csv,
         pending_csv_path=args.pending_csv,
+        trim_queue_after_run=args.trim_queue,
     )
 
     try:
