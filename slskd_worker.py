@@ -56,6 +56,7 @@ _skip_download_reconcile: bool = False
 _write_pending_csv: bool = True
 _pending_csv_path: Optional[str] = None
 _trim_queue_after_run: bool = False
+_cleanup_ephemeral_pending: bool = False
 
 
 def configure_worker_context(
@@ -72,12 +73,14 @@ def configure_worker_context(
     write_pending_csv: bool = True,
     pending_csv_path: Optional[str] = None,
     trim_queue_after_run: bool = False,
+    cleanup_ephemeral_pending: bool = False,
 ) -> None:
     """Bind mutable state and paths used by the CSV workflow engine."""
     global _results_log, _stats, _log_dir, _csv_file, _batch_size
     global _checkpoint_file, _album_preferred_search
     global _download_settle_seconds, _skip_download_reconcile
     global _write_pending_csv, _pending_csv_path, _trim_queue_after_run
+    global _cleanup_ephemeral_pending
 
     _results_log = results_log
     _stats = stats
@@ -91,6 +94,21 @@ def configure_worker_context(
     _write_pending_csv = write_pending_csv
     _pending_csv_path = pending_csv_path
     _trim_queue_after_run = trim_queue_after_run
+    _cleanup_ephemeral_pending = cleanup_ephemeral_pending
+
+
+def _maybe_cleanup_ephemeral_pending_csvs() -> None:
+    from slskd_workspace import is_validate_pending_csv, remove_ephemeral_pending_csvs
+
+    if not _cleanup_ephemeral_pending and not is_validate_pending_csv(_csv_file):
+        return
+    workspace = Path(_csv_file).resolve().parent
+    removed = remove_ephemeral_pending_csvs(
+        workspace,
+        include_retry_pending=_cleanup_ephemeral_pending,
+    )
+    for path in removed:
+        logger.info("Removed ephemeral pending CSV: %s", path)
 
 
 def _maybe_write_pending_queue_csv() -> None:
@@ -187,6 +205,11 @@ async def reconcile_downloads_only(
 
     workspace = Path(csv_file).resolve().parent
     appended = record_successful_downloads(workspace, results_log)
+    from slskd_workspace import is_validate_pending_csv, remove_ephemeral_pending_csvs
+
+    if is_validate_pending_csv(csv_file):
+        for path in remove_ephemeral_pending_csvs(workspace, include_retry_pending=False):
+            logger.info("Removed ephemeral pending CSV: %s", path)
     if appended:
         logger.info("Appended %d row(s) to success ledger", appended)
 
@@ -621,6 +644,7 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
         _maybe_write_pending_queue_csv()
         _maybe_record_success_ledger()
         _maybe_trim_queue_from_ledger()
+        _maybe_cleanup_ephemeral_pending_csvs()
 
         save_checkpoint(
             _checkpoint_file,

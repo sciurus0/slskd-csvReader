@@ -1,7 +1,8 @@
 """
 Cross-run pipeline state: merge watermarks and success ledger (Track C).
 
-Files live in the workspace (gitignored): ``merge_state.json``, ``success_ledger.csv``.
+Files live in the pipeline workspace (gitignored), e.g. ``data/``:
+``merge_state.json``, ``success_ledger.csv``.
 """
 
 from __future__ import annotations

@@ -373,6 +373,14 @@ async def main():
         action="store_true",
         help="After reconciliation and ledger update, rewrite input CSV minus ledger keys (see trim_queue.py)",
     )
+    parser.add_argument(
+        "--cleanup-ephemeral-csv",
+        action="store_true",
+        help=(
+            "After the run, remove to_queue_pending_validate.csv and to_queue_pending.csv "
+            "from the input CSV's workspace (validate slice is always removed when used as input)"
+        ),
+    )
     args = parser.parse_args()
     
     # Setup logging based on debug flag (also creates output dir and sets log_dir)
@@ -476,6 +484,7 @@ async def main():
         write_pending_csv=not args.skip_pending_csv,
         pending_csv_path=args.pending_csv,
         trim_queue_after_run=args.trim_queue,
+        cleanup_ephemeral_pending=args.cleanup_ephemeral_csv,
     )
 
     try:

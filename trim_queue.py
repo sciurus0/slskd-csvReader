@@ -9,7 +9,7 @@ Usage::
 
     python3 trim_queue.py --dry-run
     python3 trim_queue.py
-    python3 trim_queue.py --workspace /path/to/DEV
+    python3 trim_queue.py --workspace data
     python3 slskd-spotify.py --csv to_queue.csv --trim-queue
 """
 
@@ -21,7 +21,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from merge_queue import QUEUE_CSV_COLUMNS, QUEUE_FILENAME, load_queue_csv
+from merge_queue import QUEUE_CSV_COLUMNS, load_queue_csv
+from slskd_workspace import archive_csv_path, queue_csv_path, resolve_workspace
 from slskd_csv import atomic_write_pipeline_csv
 from slskd_pipeline_state import TrimQueueStats, load_ledger_keys, trim_queue_rows
 
@@ -41,10 +42,10 @@ def trim_queue_workspace(
     Trim ``workspace/to_queue.csv`` against ``success_ledger.csv``.
 
     When ``backup`` is true and not dry-run, copies the queue to
-    ``<timestamp>-to_queue-pre-trim.csv`` first.
+    ``archive/csv-YYYYMMDD/<timestamp>-to_queue-pre-trim.csv`` first.
     """
     workspace = workspace.resolve()
-    queue_path = workspace / QUEUE_FILENAME
+    queue_path = queue_csv_path(workspace)
     if not queue_path.is_file():
         _die(f"Queue not found: {queue_path}")
 
@@ -65,9 +66,11 @@ def trim_queue_workspace(
 
     if backup:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup_path = workspace / f"{stamp}-to_queue-pre-trim.csv"
+        backup_path = archive_csv_path(
+            workspace, stamp[:8], f"{stamp}-to_queue-pre-trim.csv"
+        )
         shutil.copy2(queue_path, backup_path)
-        print(f"Backup: {backup_path}", file=sys.stderr)
+        print(f"Archived pre-trim backup: {backup_path}", file=sys.stderr)
 
     atomic_write_pipeline_csv(queue_path, kept, fieldnames=QUEUE_CSV_COLUMNS)
     print(f"Wrote {stats.rows_out} rows to {queue_path}", file=sys.stderr)
@@ -81,8 +84,8 @@ def main() -> None:
     parser.add_argument(
         "--workspace",
         type=Path,
-        default=Path.cwd(),
-        help="Directory with to_queue.csv and success_ledger.csv",
+        default=None,
+        help="Pipeline data directory (default: ./data/, or cwd if legacy flat layout)",
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
@@ -91,9 +94,7 @@ def main() -> None:
         help="Do not copy queue to <timestamp>-to_queue-pre-trim.csv first",
     )
     args = parser.parse_args()
-    workspace = args.workspace.resolve()
-    if not workspace.is_dir():
-        _die(f"Not a directory: {workspace}")
+    workspace = resolve_workspace(args.workspace)
     trim_queue_workspace(workspace, dry_run=args.dry_run, backup=not args.no_backup)
 
 

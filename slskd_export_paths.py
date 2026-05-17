@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from slskd_workspace import export_search_roots, exports_dir
+
 SPOTIFY_EXPORT_SUFFIX = "-spotify-export.csv"
 
 
@@ -40,16 +42,30 @@ def export_date_from_name(name: str) -> Optional[str]:
 
 def find_latest_spotify_export(workspace: Path) -> Optional[Path]:
     dated: List[Tuple[str, Path]] = []
-    for path in workspace.glob(f"*{SPOTIFY_EXPORT_SUFFIX}"):
-        if not path.is_file():
+    for root in export_search_roots(workspace):
+        if not root.is_dir():
             continue
-        date_str = export_date_from_name(path.name)
-        if date_str:
-            dated.append((date_str, path))
+        for path in root.glob(f"*{SPOTIFY_EXPORT_SUFFIX}"):
+            if not path.is_file():
+                continue
+            date_str = export_date_from_name(path.name)
+            if date_str:
+                dated.append((date_str, path))
     if not dated:
         return None
     dated.sort(key=lambda item: item[0])
     return dated[-1][1]
+
+
+def _export_path_for_date(workspace: Path, date_str: str) -> Path:
+    """Prefer ``exports/``; use legacy workspace root if only that copy exists."""
+    preferred = exports_dir(workspace) / spotify_export_basename(date_str)
+    legacy = workspace / spotify_export_basename(date_str)
+    if preferred.is_file():
+        return preferred
+    if legacy.is_file():
+        return legacy
+    return preferred
 
 
 def default_new_export_path(
@@ -58,7 +74,7 @@ def default_new_export_path(
 ) -> Tuple[Path, str]:
     """Path for writing a new export (default date: today's local calendar)."""
     d = date_str or datetime.now().strftime("%Y%m%d")
-    return workspace / spotify_export_basename(d), d
+    return exports_dir(workspace) / spotify_export_basename(d), d
 
 
 def resolve_spotify_export(
@@ -81,7 +97,7 @@ def resolve_spotify_export(
         )
         return path, date
     if date_str is not None:
-        return workspace / spotify_export_basename(date_str), date_str
+        return _export_path_for_date(workspace, date_str), date_str
     latest = find_latest_spotify_export(workspace)
     if latest is None:
         raise FileNotFoundError(
