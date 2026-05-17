@@ -8,7 +8,7 @@ Merge-time rules are enabled one at a time after sign-off. See merge_queue.py.
 from __future__ import annotations
 
 import re
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 _FEAT_PATTERN = re.compile(r"\b(?:feat\.?|featuring|ft\.?)\b", re.IGNORECASE)
 _COLLAB_LIST_SPLIT = re.compile(r"\s*[,;]\s*")
@@ -18,9 +18,21 @@ _MATCH_WS_PATTERN = re.compile(r"\s+")
 # Separator for ``artist_alternates`` column (pipe avoids CSV comma issues).
 ARTIST_ALTERNATES_SEP = " | "
 
+
+def parse_artist_alternates_list(alternates: str) -> List[str]:
+    """Split ``artist_alternates`` column text into non-empty collaborator names."""
+    if not (alternates or "").strip():
+        return []
+    return [p.strip() for p in alternates.split(ARTIST_ALTERNATES_SEP) if p.strip()]
+
 # Query strategies that search without album text — ranking should not require album in path.
 TRACK_FOCUSED_SEARCH_STRATEGIES = frozenset(
-    {"artist_track", "primary_artist_track"}
+    {
+        "artist_track",
+        "primary_artist_track",
+        "alternate_artist_track",
+        "alternate_artist_album",
+    }
 )
 
 
@@ -40,8 +52,7 @@ def normalize_artist_n3_primary_comma(artist: str) -> str:
     NORM-03 — Primary artist for comma-separated credit lists (merge column only).
 
     ``Artist A, Artist B`` → ``Artist A``. Does not split on ``&`` or ``and`` so band
-    names like ``Nick Cave & The Bad Seeds`` stay intact (see ``split_artist_variants``
-    for search-time behavior; SRCH-03 may narrow that separately).
+    names like ``Nick Cave & The Bad Seeds`` stay intact (same rules at search time).
     """
     if not artist or "," not in artist:
         return artist
