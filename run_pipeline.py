@@ -2,11 +2,11 @@
 """
 Interactive end-to-end pipeline: Spotify playlist pick → export → merge_queue → slskd-spotify.
 
-Run from the repo workspace (DEV or PROD) so paths resolve to to_queue.csv and dated exports.
+Run from the repo tree (DEV or PROD). Default data directory is ``./data/`` (see POLISH-02).
 
 Examples:
     python3 run_pipeline.py
-    python3 run_pipeline.py --workspace .
+    python3 run_pipeline.py --workspace data
     python3 run_pipeline.py --pick 1,4,7 --yes
     python3 run_pipeline.py --dry-run
     python3 run_pipeline.py --skip-slskd
@@ -30,6 +30,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from slskd_config import CHECKPOINT_FILE, load_api_txt
 from slskd_csv import checkpoint_resume_row, load_checkpoint
 from slskd_export_paths import default_new_export_path, parse_export_date
+from slskd_workspace import (
+    ensure_workspace_layout,
+    logs_dir,
+    queue_csv_path,
+    resolve_workspace,
+)
 
 from spotify_playlist_fetch import (
     DEFAULT_REDIRECT_URI,
@@ -100,7 +106,7 @@ def build_pipeline_plan(
         ]
 
     merge_writes = () if dry_run else (
-        f"dated backup of {queue_path.name}",
+        f"archive/csv-YYYYMMDD/{queue_path.name} backup",
         str(queue_path),
         "merge_state.json",
     )
@@ -369,7 +375,7 @@ def build_slskd_argv(
         "--csv",
         str(queue_path),
         "--output-dir",
-        str(workspace / "logs"),
+        str(logs_dir(workspace)),
         "--checkpoint-file",
         str(checkpoint_path),
     ]
@@ -405,8 +411,8 @@ def main() -> None:
     parser.add_argument(
         "--workspace",
         type=Path,
-        default=Path.cwd(),
-        help="Directory for export, queue, and logs (default: current directory)",
+        default=None,
+        help="Pipeline data directory (default: ./data/, or cwd if legacy flat layout)",
     )
     parser.add_argument(
         "--pick",
@@ -492,7 +498,7 @@ def main() -> None:
         type=Path,
         default=None,
         metavar="PATH",
-        help="Queue CSV for slskd (default: <workspace>/to_queue.csv)",
+        help="Queue CSV for slskd (default: <workspace>/to_queue.csv under data/)",
     )
     parser.add_argument(
         "--checkpoint-file",
@@ -515,9 +521,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    workspace = args.workspace.resolve()
-    if not workspace.is_dir():
-        _die(f"Workspace is not a directory: {workspace}")
+    workspace = resolve_workspace(args.workspace)
+    ensure_workspace_layout(workspace)
 
     try:
         export_path, date_str = default_new_export_path(
@@ -525,7 +530,7 @@ def main() -> None:
         )
     except ValueError as e:
         _die(f"--date {e}")
-    queue_path = (args.csv or workspace / "to_queue.csv").resolve()
+    queue_path = (args.csv or queue_csv_path(workspace)).resolve()
     checkpoint_path = _checkpoint_path(workspace, args.checkpoint_file)
     slskd_only = args.resume or args.slskd_only
 
