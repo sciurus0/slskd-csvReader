@@ -9,7 +9,7 @@ Steps:
 3. Filter export rows by per-playlist ``added_at`` watermarks (``merge_state.json``) and
    ``success_ledger.csv`` unless ``--force-full-import``.
 4. Load backup rows, then append filtered Spotify export rows (existing queue first).
-5. Sanitize names, then NORM artist (full credits + ``artist_primary`` + ``artist_alternates``); pass through
+5. Sanitize artist, NORM artist credits (``artist_primary`` / ``artist_alternates``), NORM-04 sanitize-only album/track; pass through
    ``duration_ms``, ``spotify_track_id``, ``is_unavailable`` when present.
 6. Dedupe with hybrid key: ``spotify_track_id`` when set, else sanitized (artist, album, track).
    Queue rows win; duplicate export rows are skipped.
@@ -45,7 +45,7 @@ from slskd_pipeline_state import (
     save_merge_state,
 )
 from slskd_export_paths import parse_export_date, resolve_spotify_export
-from slskd_normalize import normalize_queue_row
+from slskd_normalize import normalize_album_track_n4, normalize_queue_row
 from slskd_sanitize import sanitize_queue_field
 
 QUEUE_FILENAME = "to_queue.csv"
@@ -100,7 +100,7 @@ def _boolish_field(raw: str) -> str:
 
 
 def _sanitize_pipeline_row(row: Dict[str, str]) -> Dict[str, str]:
-    """Sanitize names, then NORM artist credits; pass through identity fields."""
+    """Sanitize artist, NORM credits (NORM-02/03), NORM-04 album/track; pass through identity fields."""
     prepared = normalize_queue_row(
         {
             "artist": sanitize_queue_field(row.get("artist", "")),
@@ -111,12 +111,13 @@ def _sanitize_pipeline_row(row: Dict[str, str]) -> Dict[str, str]:
             "is_unavailable": row.get("is_unavailable", ""),
         }
     )
+    prepared = normalize_album_track_n4(prepared)
     return {
         "artist": prepared["artist"],
         "artist_primary": prepared.get("artist_primary", ""),
         "artist_alternates": prepared.get("artist_alternates", ""),
-        "album": sanitize_queue_field(prepared.get("album", "")),
-        "track": sanitize_queue_field(prepared.get("track", "")),
+        "album": prepared.get("album", ""),
+        "track": prepared.get("track", ""),
         "duration_ms": prepared.get("duration_ms", ""),
         "spotify_track_id": prepared.get("spotify_track_id", ""),
         "is_unavailable": _boolish_field(prepared.get("is_unavailable", "")),
