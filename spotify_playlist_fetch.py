@@ -308,13 +308,17 @@ def _load_token_cache(path: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _save_token_cache(path: Path, data: Dict[str, Any]) -> None:
+def _save_json_cache(path: Path, data: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     try:
         path.chmod(0o600)
     except OSError:
         pass
+
+
+def _save_token_cache(path: Path, data: Dict[str, Any]) -> None:
+    _save_json_cache(path, data)
 
 
 def _load_throttle_cache(path: Path) -> Optional[Dict[str, Any]]:
@@ -328,12 +332,46 @@ def _load_throttle_cache(path: Path) -> Optional[Dict[str, Any]]:
 
 
 def _save_throttle_cache(path: Path, data: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    _save_json_cache(path, data)
+
+
+def _oauth_callback_path(redirect_uri: str) -> str:
+    return urlparse(redirect_uri).path or "/"
+
+
+def _oauth_callback_result(
+    request_path: str,
+    expected_path: str,
+    expected_state: str,
+) -> Optional[Tuple[Dict[str, Any], bytes]]:
+    """Parse an OAuth redirect request.
+
+    Returns None when the path should be ignored (e.g. /favicon.ico).
+    Otherwise returns (result_updates, html_body) for the HTTP response.
+    """
+    parsed = urlparse(request_path)
+    if parsed.path != expected_path:
+        return None
+    qs = parse_qs(parsed.query)
+    if qs.get("error"):
+        return (
+            {"error": qs["error"][0]},
+            b"<html><body>Authorization failed. You may close this window.</body></html>",
+        )
+    if qs.get("code") and qs.get("state"):
+        if qs["state"][0] != expected_state:
+            return (
+                {"error": "state_mismatch"},
+                b"<html><body>State mismatch. Close this window and try again.</body></html>",
+            )
+        return (
+            {"code": qs["code"][0]},
+            b"<html><body>Success. You may close this window.</body></html>",
+        )
+    return (
+        {"error": "missing_code"},
+        b"<html><body>Invalid callback.</body></html>",
+    )
 
 
 def _enforce_throttle_cooldown(path: Path) -> None:
@@ -422,6 +460,7 @@ def interactive_authorize(
 ) -> str:
     """Listen first, then open browser — avoids losing the OAuth redirect race."""
     host, port = _redirect_host_port(redirect_uri)
+    expected_path = _oauth_callback_path(redirect_uri)
     result: Dict[str, Any] = {}
     done = threading.Event()
 
@@ -430,21 +469,15 @@ def interactive_authorize(
             pass
 
         def do_GET(self) -> None:
-            parsed = urlparse(self.path)
-            qs = parse_qs(parsed.query)
-            if qs.get("error"):
-                result["error"] = qs["error"][0]
-                body = b"<html><body>Authorization failed. You may close this window.</body></html>"
-            elif qs.get("code") and qs.get("state"):
-                if qs["state"][0] != expected_state:
-                    result["error"] = "state_mismatch"
-                    body = b"<html><body>State mismatch. Close this window and try again.</body></html>"
-                else:
-                    result["code"] = qs["code"][0]
-                    body = b"<html><body>Success. You may close this window.</body></html>"
-            else:
-                result["error"] = "missing_code"
-                body = b"<html><body>Invalid callback.</body></html>"
+            parsed_result = _oauth_callback_result(
+                self.path, expected_path, expected_state
+            )
+            if parsed_result is None:
+                self.send_response(404)
+                self.end_headers()
+                return
+            updates, body = parsed_result
+            result.update(updates)
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -531,13 +564,14 @@ def ensure_user_access_token(
         code, redirect_uri, client_id, client_secret, code_verifier
     )
     expires_in = float(token_payload.get("expires_in", 3600))
+    issued_at = time.time()
     refresh = token_payload.get("refresh_token")
     if not refresh:
         _die("Spotify did not return a refresh_token; check app settings and scopes.")
     store = {
         "access_token": token_payload["access_token"],
         "refresh_token": refresh,
-        "expires_at": now + expires_in,
+        "expires_at": issued_at + expires_in,
         "token_type": token_payload.get("token_type", "Bearer"),
     }
     _save_token_cache(token_path, store)
