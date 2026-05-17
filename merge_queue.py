@@ -304,8 +304,11 @@ def main() -> None:
 
     rows_backup: List[Dict[str, str]] = []
     if queue_path.is_file():
-        shutil.copy2(queue_path, backup_path)
-        rows_backup = _load_queue_rows(backup_path)
+        if args.dry_run:
+            rows_backup = _load_queue_rows(queue_path)
+        else:
+            shutil.copy2(queue_path, backup_path)
+            rows_backup = _load_queue_rows(backup_path)
 
     export_rows = _load_export_rows(spotify_path)
     merge_state = load_merge_state(workspace)
@@ -329,7 +332,10 @@ def main() -> None:
     )
 
     if args.dry_run:
-        print("Dry-run: not writing files.", file=sys.stderr)
+        print(
+            "Dry-run: no queue backup, merge_state, or to_queue.csv write.",
+            file=sys.stderr,
+        )
         return
 
     atomic_write_pipeline_csv(queue_path, merged, fieldnames=QUEUE_CSV_COLUMNS)
