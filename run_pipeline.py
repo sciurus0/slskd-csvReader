@@ -169,6 +169,11 @@ def main() -> None:
         help="Calendar date for filenames (default: today, local)",
     )
     parser.add_argument(
+        "--force-full-import",
+        action="store_true",
+        help="Pass through to merge_queue: ignore added_at watermarks (ledger + dedupe still apply)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Export and merge_queue --dry-run only; do not write queue or run slskd",
@@ -287,6 +292,8 @@ def main() -> None:
     print(f"Wrote {row_count} rows to {export_path}", file=sys.stderr)
 
     merge_args = ["--workspace", str(workspace), "--date", date_str]
+    if args.force_full_import:
+        merge_args.append("--force-full-import")
     if args.dry_run:
         merge_args.append("--dry-run")
     _run_python_step("merge_queue.py", merge_args, workspace=workspace, label="merge_queue")
