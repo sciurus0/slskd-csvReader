@@ -1,5 +1,5 @@
 """
-Configuration defaults for the slskd-spotify workflow.
+Configuration defaults for the slskd_spotify workflow.
 """
 
 import configparser

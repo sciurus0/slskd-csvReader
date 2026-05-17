@@ -10,13 +10,13 @@ Use these daily; ignore the rest unless you have a specific recovery or tuning n
 
 | Tier | What | Examples |
 | --- | --- | --- |
-| **Golden** | End-to-end or queue processing | `run_pipeline.py --pick … -y`, `--resume -y`, `slskd-spotify.py --trim-queue`, `merge_queue.py` |
-| **Tuning** | Rate, formats, debug | `slskd-spotify.py --delay`, `--formats`, `--batch-size`, `--download-settle-seconds` |
+| **Golden** | End-to-end or queue processing | `run_pipeline.py --pick … -y`, `--resume -y`, `slskd_spotify.py --trim-queue`, `merge_queue.py` |
+| **Tuning** | Rate, formats, debug | `slskd_spotify.py --delay`, `--formats`, `--batch-size`, `--download-settle-seconds` |
 | **Hygiene** | Same behavior as flags on slskd | `trim_queue.py`, `pipeline_cleanup.py --ephemeral` |
-| **Recovery** | Fix a past run without re-searching | `slskd-spotify.py --reconcile-downloads`, `--gen-report`, `--retry-failed` |
+| **Recovery** | Fix a past run without re-searching | `slskd_spotify.py --reconcile-downloads`, `--gen-report`, `--retry-failed` |
 | **Legacy** | Pre–SRCH-02 / enqueue-only; avoid | `--skip-download-reconcile`, `--direct-api`, `--exact-match`, `--album-preferred-search` |
 
-`slskd-spotify.py --help` groups flags the same way. Legacy flags still work but log a deprecation warning.
+`slskd_spotify.py --help` groups flags the same way. Legacy flags still work but log a deprecation warning.
 
 ### CLI audit (local logs)
 
@@ -59,7 +59,7 @@ Writes export to `data/exports/`, merges into `data/to_queue.csv`, optionally ru
 ### Process the queue
 
 ```bash
-python3 slskd-spotify.py --csv data/to_queue.csv --trim-queue
+python3 slskd_spotify.py --csv data/to_queue.csv --trim-queue
 ```
 
 - Searches each row, reconciles downloads, appends successes to `data/success_ledger.csv`
@@ -70,7 +70,7 @@ python3 slskd-spotify.py --csv data/to_queue.csv --trim-queue
 
 ```bash
 python3 run_pipeline.py --resume -y
-# or: python3 slskd-spotify.py --csv data/to_queue.csv --resume
+# or: python3 slskd_spotify.py --csv data/to_queue.csv --resume
 ```
 
 Uses `data/checkpoint.pkl` in the workspace.
@@ -124,7 +124,7 @@ Committed fixtures and a log index live under [`fixtures/srch/README.md`](../fix
 Quick validate run from repo root:
 
 ```bash
-python3 slskd-spotify.py --csv fixtures/srch/validate_input.csv --output-dir data/logs
+python3 slskd_spotify.py --csv fixtures/srch/validate_input.csv --output-dir data/logs
 ```
 
 Compare new `data/logs/results_*.csv` to the baseline noted in that README.
