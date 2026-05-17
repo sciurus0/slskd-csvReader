@@ -40,11 +40,29 @@ def decode_pipeline_text(raw: bytes) -> str:
     ) from last_err
 
 
-def read_pipeline_csv_rows(path: str) -> List[Dict[str, str]]:
+def read_pipeline_csv_bytes(path: str | Path) -> bytes:
+    """Read raw bytes from a pipeline CSV path."""
+    return Path(path).read_bytes()
+
+
+def read_pipeline_csv_with_fieldnames(
+    path: str | Path,
+) -> Tuple[List[str], List[Dict[str, str]]]:
+    """
+    Read a pipeline CSV (UTF-8 / UTF-8 BOM).
+
+    Returns ``(fieldnames, rows)``. Raises ``UnicodeDecodeError`` or ``OSError``.
+    """
+    text = decode_pipeline_text(read_pipeline_csv_bytes(path))
+    reader = csv.DictReader(StringIO(text))
+    fieldnames = list(reader.fieldnames or [])
+    return fieldnames, list(reader)
+
+
+def read_pipeline_csv_rows(path: str | Path) -> List[Dict[str, str]]:
     """Read a CSV into dict rows. Raises UnicodeDecodeError if file is not valid UTF-8."""
-    raw = Path(path).read_bytes()
-    text = decode_pipeline_text(raw)
-    return list(csv.DictReader(StringIO(text)))
+    _, rows = read_pipeline_csv_with_fieldnames(path)
+    return rows
 
 
 def atomic_write_pipeline_csv(
@@ -205,10 +223,7 @@ def generate_report(
 
         original_fieldnames: List[str] = []
         try:
-            raw = Path(csv_file).read_bytes()
-            text = decode_pipeline_text(raw)
-            reader = csv.reader(StringIO(text))
-            original_fieldnames = next(reader)
+            original_fieldnames, _ = read_pipeline_csv_with_fieldnames(csv_file)
             logger.info("Read CSV headers from %s (UTF-8)", csv_file)
         except UnicodeDecodeError:
             logger.warning("Could not decode input CSV as UTF-8: %s", csv_file)

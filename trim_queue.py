@@ -10,7 +10,7 @@ Usage::
     python3 trim_queue.py --dry-run
     python3 trim_queue.py
     python3 trim_queue.py --workspace data
-    python3 slskd-spotify.py --csv to_queue.csv --trim-queue
+    python3 slskd-spotify.py --csv data/to_queue.csv --trim-queue
 """
 
 from __future__ import annotations

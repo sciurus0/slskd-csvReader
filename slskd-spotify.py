@@ -1,24 +1,13 @@
 #!/usr/bin/env python3
 """
-queue_albums_slskd_hybrid.py
+slskd-spotify.py — queue tracks from a pipeline CSV via the SLSKD HTTP API.
 
-Hybrid: always run a fresh search via POST, and use slskd_api client for enqueueing.
-Supports single-track or full-album queueing with advanced features:
-- Rate limiting
-- Error resilience
-- Comprehensive logging
-- Batch processing
-- Resumability
-- Timeout handling
-- Format prioritization (.mp3 → .m4a → .flac)
-- Retry-failed mode for failed downloads
-- Post-run download reconciliation (settle wait, then poll transfers API; success = completed download)
-- Post-run pending queue CSV (<input>_pending.csv) for rows without completed download
-- Queue management with configurable limits
-- Queue CSV (to_queue.csv) should be produced by merge_queue.py so artist/album/track fields are sanitized once before searching
-- Bounded fallback query generation for Soulseek searches
-- Literal query first (punctuation preserved), punctuation-softened fallback second
-- Strict candidate ranking against CSV fields (artist/album/track), with optional weak duration tie-break
+Queue CSVs should come from ``merge_queue.py`` (sanitized wide ``data/to_queue.csv``).
+See ``docs/DEV_OPS.md`` for workspace layout, merge vs trim, and pending CSV behavior.
+
+Features: batch processing, checkpoint resume, bounded Soulseek query attempts,
+normalized path ranking (SRCH-02), optional alternate-artist search (SRCH-03),
+post-run download reconciliation (default 300s settle), pending retry CSV, ``--trim-queue``.
 
 API Key Loading:
 ----------------
@@ -55,10 +44,9 @@ Command-line Options:
 ------------------
   -h, --help            Show this help message and exit
   
-  -c CSV, --csv CSV     Path to CSV file (default: to_queue.csv)
-                        The CSV should contain columns: artist, album, [track]
-                        If track is provided, only that track will be downloaded
-                        If track is empty, the entire album will be downloaded
+  -c CSV, --csv CSV     Path to queue CSV (default: data/to_queue.csv)
+                        Wide columns: artist, artist_primary, artist_alternates,
+                        album, track, … — from merge_queue.py
   
   -r, --resume          Resume from last checkpoint
                         Continues processing from where previous run stopped
@@ -82,8 +70,7 @@ Command-line Options:
                         These file types will never be downloaded
                         
   -o DIR, --output-dir DIR
-                        Directory for output files (default: logs)
-                        Stores log files and results CSV files
+                        Log and results directory (default: data/logs)
                         
   --debug               Enable debug logging for more detailed output
                         Includes API call details and file processing
@@ -126,17 +113,17 @@ Command-line Options:
 
 Examples:
 --------
-  # Basic usage with default settings (no queue limit)
-  python slskd-spotify.py
-  
-  # Process a specific CSV file with increased delay between requests
-  python slskd-spotify.py --csv my_music.csv --delay 2.5
-  
-  # Resume a previous run that was interrupted, with larger batch size
-  python slskd-spotify.py --resume --batch-size 20
-  
-  # Retry only failed downloads from previous run
-  python slskd-spotify.py --retry-failed
+  # Process the canonical queue (from repo root)
+  python3 slskd-spotify.py --csv data/to_queue.csv --trim-queue
+
+  # Resume after interrupt (uses data/checkpoint.pkl by default)
+  python3 slskd-spotify.py --resume
+
+  # Validate / regression slice (see fixtures/srch/)
+  python3 slskd-spotify.py --csv fixtures/srch/validate_input.csv --skip-pending-csv
+
+  # Retry failures from the latest results CSV in data/logs
+  python3 slskd-spotify.py --retry-failed
   
   # Change allowed formats and their priority
   python slskd-spotify.py --formats .mp3 .flac
@@ -144,8 +131,8 @@ Examples:
   # Change excluded file types
   python slskd-spotify.py --exclude .lrc .nfo .m3u
   
-  # Specify a custom output directory for reports and logs
-  python slskd-spotify.py --output-dir results/may2025
+  # Custom log directory under the workspace
+  python3 slskd-spotify.py --output-dir data/logs
   
   # Run with debug logging
   python slskd-spotify.py --debug
@@ -160,7 +147,9 @@ Examples:
   python slskd-spotify.py --reconcile-downloads
 
   # Reconcile using explicit artifacts
-  python slskd-spotify.py --reconcile-downloads --reconcile-from-csv logs/to_queue_results.csv --reconcile-log logs/slskd_import_20260516_094029.log
+  python3 slskd-spotify.py --reconcile-downloads \\
+    --reconcile-from-csv data/logs/to_queue_results.csv \\
+    --reconcile-log data/logs/slskd_import_20260516_094029.log
   
   # Use exact matching for tracks
   python slskd-spotify.py --exact-match
@@ -299,7 +288,12 @@ async def main():
     global USE_DIRECT_API, EXACT_MATCH, ALBUM_PREFERRED_SEARCH
     
     parser = argparse.ArgumentParser(description="Queue albums or tracks from CSV to SLSKD")
-    parser.add_argument("--csv", "-c", default=CSV_FILE, help="Path to CSV file (default: to_queue.csv)")
+    parser.add_argument(
+        "--csv",
+        "-c",
+        default=CSV_FILE,
+        help=f"Path to queue CSV (default: {CSV_FILE}; use merge_queue.py to build)",
+    )
     parser.add_argument("--resume", "-r", action="store_true", help="Resume from last checkpoint")
     parser.add_argument("--retry-failed", "-rf", action="store_true", 
                         help="Only retry rows that failed in previous runs")
