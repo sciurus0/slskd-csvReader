@@ -1,5 +1,5 @@
 """
-Configuration defaults for the slskd-spotify workflow.
+Configuration defaults for the slskd_spotify workflow.
 """
 
 import configparser
@@ -101,19 +101,14 @@ BATCH_SIZE = 10
 MAX_RETRIES = 3
 SEARCH_TIMEOUT = 60
 ENQUEUE_TIMEOUT = 30
-CHECKPOINT_FILE = "data/checkpoint.pkl"
+CHECKPOINT_BASENAME = "checkpoint.pkl"
+CHECKPOINT_FILE = f"data/{CHECKPOINT_BASENAME}"
 EXCLUDED_EXTENSIONS = [".lrc"]
 CIRCUIT_BREAKER_THRESHOLD = 5
 CIRCUIT_BREAKER_TIMEOUT = 300
-USE_DIRECT_API = False
-EXACT_MATCH = False
-ALBUM_PREFERRED_SEARCH = False
-
 ALLOWED_FORMATS = [".mp3", ".m4a", ".flac"]
 POLL_INTERVAL = 2
 MAX_POLLS = 20
-
-SOURCE = "HeadphonesVip"
 
 # After the queue CSV is fully processed, wait before polling SLSKD transfer state.
 DEFAULT_DOWNLOAD_SETTLE_SECONDS = 300

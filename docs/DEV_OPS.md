@@ -2,6 +2,23 @@
 
 Short guide for the **slskd-csvReader** DEV copy. Production uses the same scripts under `PROD/` with its own `data/` tree.
 
+**New here?** Start with [README.md](../README.md) (prerequisites, `api.txt`, install). This doc is the day-to-day operator reference.
+
+## Golden path vs everything else
+
+Use these daily; ignore the rest unless you have a specific recovery or tuning need.
+
+| Tier | What | Examples |
+| --- | --- | --- |
+| **Golden** | End-to-end or queue processing | `run_pipeline.py --pick … -y`, `--resume -y`, `slskd_spotify.py --trim-queue`, `merge_queue.py` |
+| **Tuning** | Rate, formats, debug | `slskd_spotify.py --delay`, `--formats`, `--batch-size`, `--download-settle-seconds` |
+| **Hygiene** | Trim queue or drop ephemeral CSVs | `trim_queue.py`, `pipeline_cleanup.py --ephemeral` |
+| **Recovery** | Fix a past run without re-searching | `slskd_spotify.py --reconcile-downloads`, `--gen-report`, `--retry-failed` |
+
+`slskd_spotify.py --help` groups flags: golden path, tuning, recovery.
+
+Validate-input runs still auto-remove `to_queue_pending_validate.csv` after each slskd run. For other pending files, use `pipeline_cleanup.py`.
+
 ## One queue
 
 There is a **single canonical work queue**:
@@ -23,7 +40,7 @@ Everything else is derived or ephemeral.
 | `data/logs/` | Import logs and `results_*.csv` reports |
 | `data/archive/csv-YYYYMMDD/` | Dated backups before merge or trim |
 
-Do not treat `to_queue_pending.csv` as a second source of truth. After a full run it lists what still failed; the next full run should start from `data/to_queue.csv` (often after `--trim-queue`).
+Do not treat `data/to_queue_pending.csv` as a second source of truth. After a full run it lists what still failed; the next full run should start from `data/to_queue.csv` (often after `--trim-queue`).
 
 ## Typical flows
 
@@ -39,7 +56,7 @@ Writes export to `data/exports/`, merges into `data/to_queue.csv`, optionally ru
 ### Process the queue
 
 ```bash
-python3 slskd-spotify.py --csv data/to_queue.csv --trim-queue
+python3 slskd_spotify.py --csv data/to_queue.csv --trim-queue
 ```
 
 - Searches each row, reconciles downloads, appends successes to `data/success_ledger.csv`
@@ -50,7 +67,7 @@ python3 slskd-spotify.py --csv data/to_queue.csv --trim-queue
 
 ```bash
 python3 run_pipeline.py --resume -y
-# or: python3 slskd-spotify.py --csv data/to_queue.csv --resume
+# or: python3 slskd_spotify.py --csv data/to_queue.csv --resume
 ```
 
 Uses `data/checkpoint.pkl` in the workspace.
@@ -83,8 +100,8 @@ python3 pipeline_cleanup.py --ephemeral      # validate + retry pending
 If `data/success_ledger.csv` predates NORM-06 (no `artist_primary` column), rewrite once:
 
 ```bash
-python3 backfill_ledger.py --dry-run
-python3 backfill_ledger.py
+python3 scripts/backfill_ledger.py --dry-run
+python3 scripts/backfill_ledger.py
 ```
 
 Otherwise the column appears automatically the next time slskd appends successes.
@@ -104,7 +121,7 @@ Committed fixtures and a log index live under [`fixtures/srch/README.md`](../fix
 Quick validate run from repo root:
 
 ```bash
-python3 slskd-spotify.py --csv fixtures/srch/validate_input.csv --output-dir data/logs
+python3 slskd_spotify.py --csv fixtures/srch/validate_input.csv --output-dir data/logs
 ```
 
 Compare new `data/logs/results_*.csv` to the baseline noted in that README.

@@ -13,7 +13,7 @@ class TestRunPipelineResume(unittest.TestCase):
         ws = Path("/tmp/dev-workspace")
         self.assertEqual(
             _checkpoint_path(ws, None),
-            (ws / "data" / "checkpoint.pkl").resolve(),
+            (ws / "checkpoint.pkl").resolve(),
         )
 
     def test_build_slskd_argv_resume_and_checkpoint(self) -> None:
@@ -26,7 +26,6 @@ class TestRunPipelineResume(unittest.TestCase):
             resume=True,
             checkpoint_path=ckpt,
             download_settle_seconds=None,
-            skip_download_reconcile=False,
             skip_pending_csv=False,
             trim_queue=True,
         )
@@ -54,14 +53,12 @@ class TestRunPipelineResume(unittest.TestCase):
             resume=False,
             checkpoint_path=ws / "checkpoint.pkl",
             download_settle_seconds=30.0,
-            skip_download_reconcile=True,
             skip_pending_csv=True,
             trim_queue=False,
         )
         self.assertNotIn("--resume", argv)
         self.assertIn("--download-settle-seconds", argv)
         self.assertIn("30.0", argv)
-        self.assertIn("--skip-download-reconcile", argv)
         self.assertIn("--skip-pending-csv", argv)
 
 

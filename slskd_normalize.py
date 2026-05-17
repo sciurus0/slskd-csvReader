@@ -1,5 +1,5 @@
 """
-Semantic normalization for queue metadata (Track B) and Soulseek filename matching (SRCH-02).
+Semantic normalization for queue metadata (NORM) and Soulseek filename matching (SRCH-02).
 
 Merge-time rules are enabled one at a time after sign-off. See merge_queue.py.
 ``normalize_for_match`` is used when comparing CSV fields to SLSKD paths at rank time.
@@ -36,29 +36,6 @@ TRACK_FOCUSED_SEARCH_STRATEGIES = frozenset(
         "alternate_artist_album",
     }
 )
-
-
-def normalize_artist_n1_primary_semicolon(artist: str) -> str:
-    """
-    NORM-01 — Primary artist for Spotify ``;``-separated credit lists.
-
-    ``Artist A; Artist B`` → ``Artist A``. Does not split on ``,``, ``&``, or ``and``.
-    """
-    if not artist or ";" not in artist:
-        return artist
-    return artist.split(";", 1)[0].strip()
-
-
-def normalize_artist_n3_primary_comma(artist: str) -> str:
-    """
-    NORM-03 — Primary artist for comma-separated credit lists (merge column only).
-
-    ``Artist A, Artist B`` → ``Artist A``. Does not split on ``&`` or ``and`` so band
-    names like ``Nick Cave & The Bad Seeds`` stay intact (same rules at search time).
-    """
-    if not artist or "," not in artist:
-        return artist
-    return artist.split(",", 1)[0].strip()
 
 
 def normalize_artist_n2_strip_featuring(artist: str) -> str:

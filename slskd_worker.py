@@ -1,5 +1,5 @@
 """
-CSV batch processing and row workflow for the slskd-spotify script.
+CSV batch processing and row workflow for the slskd_spotify script.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from slskd_config import ALBUM_PREFERRED_SEARCH as _CONFIG_ALBUM_PREF
 from slskd_csv import (
     read_pipeline_csv_rows,
     generate_report,
@@ -39,7 +38,7 @@ from slskd_query import (
     is_solid_enqueue_pick,
 )
 from slskd_pipeline_state import record_successful_downloads
-from slskd_search import detect_search_intent, rank_all_results, search_slskd_async
+from slskd_search import rank_all_results, search_slskd_async
 
 # Runtime mirrors CLI-overridden settings in the entry script (see configure_worker_context).
 _results_log: List[Dict[str, Any]] = []
@@ -48,13 +47,10 @@ _log_dir: str = ""
 _csv_file: str = ""
 _batch_size: int = 0
 _checkpoint_file: str = ""
-_album_preferred_search: bool = _CONFIG_ALBUM_PREF
 _download_settle_seconds: float = 300.0
-_skip_download_reconcile: bool = False
 _write_pending_csv: bool = True
 _pending_csv_path: Optional[str] = None
 _trim_queue_after_run: bool = False
-_cleanup_ephemeral_pending: bool = False
 
 
 def configure_worker_context(
@@ -65,20 +61,15 @@ def configure_worker_context(
     csv_file: str,
     batch_size: int,
     checkpoint_file: str,
-    album_preferred_search: bool,
     download_settle_seconds: float = 300.0,
-    skip_download_reconcile: bool = False,
     write_pending_csv: bool = True,
     pending_csv_path: Optional[str] = None,
     trim_queue_after_run: bool = False,
-    cleanup_ephemeral_pending: bool = False,
 ) -> None:
     """Bind mutable state and paths used by the CSV workflow engine."""
     global _results_log, _stats, _log_dir, _csv_file, _batch_size
-    global _checkpoint_file, _album_preferred_search
-    global _download_settle_seconds, _skip_download_reconcile
+    global _checkpoint_file, _download_settle_seconds
     global _write_pending_csv, _pending_csv_path, _trim_queue_after_run
-    global _cleanup_ephemeral_pending
 
     _results_log = results_log
     _stats = stats
@@ -86,24 +77,21 @@ def configure_worker_context(
     _csv_file = csv_file
     _batch_size = batch_size
     _checkpoint_file = checkpoint_file
-    _album_preferred_search = album_preferred_search
     _download_settle_seconds = download_settle_seconds
-    _skip_download_reconcile = skip_download_reconcile
     _write_pending_csv = write_pending_csv
     _pending_csv_path = pending_csv_path
     _trim_queue_after_run = trim_queue_after_run
-    _cleanup_ephemeral_pending = cleanup_ephemeral_pending
 
 
 def _maybe_cleanup_ephemeral_pending_csvs() -> None:
     from slskd_workspace import is_validate_pending_csv, remove_ephemeral_pending_csvs
 
-    if not _cleanup_ephemeral_pending and not is_validate_pending_csv(_csv_file):
+    if not is_validate_pending_csv(_csv_file):
         return
     workspace = Path(_csv_file).resolve().parent
     removed = remove_ephemeral_pending_csvs(
         workspace,
-        include_retry_pending=_cleanup_ephemeral_pending,
+        include_retry_pending=False,
     )
     for path in removed:
         logger.info("Removed ephemeral pending CSV: %s", path)
@@ -392,13 +380,11 @@ async def process_row(client, row, row_index, total_rows):
                 logger.info(f"No results for query attempt {attempt_idx}: {query}")
                 continue
 
-            search_intent = detect_search_intent(rank_artist, album or "", track or "")
             attempt_ranked, rejection_reasons = rank_all_results(
                 resp_list,
                 rank_artist,
                 album if album else None,
                 track if track else None,
-                search_intent,
                 target_duration_ms=target_duration_ms,
                 search_strategy=strategy,
             )
@@ -425,7 +411,6 @@ async def process_row(client, row, row_index, total_rows):
                 album=album,
                 track=track,
                 search_strategy=strategy,
-                album_preferred_search=_album_preferred_search,
             ):
                 ranked_candidates = attempt_ranked
                 selected_pick = attempt_pick
@@ -497,9 +482,6 @@ async def process_row(client, row, row_index, total_rows):
             best_username = ranked_candidates[0]["username"]
             album_tracks = [c for c in ranked_candidates if c["username"] == best_username]
 
-            if _album_preferred_search:
-                result_entry["has_album_match"] = ranked_candidates[0].get("has_album_match", False)
-
             has_open_slot, queue_count = await check_queue_status(best_username)
             if has_open_slot:
                 files_to_queue = [t["file_info"] for t in album_tracks]
@@ -529,21 +511,15 @@ async def process_row(client, row, row_index, total_rows):
                 row_index=row_index,
             )
 
-            if _album_preferred_search and best_candidate:
+            if best_candidate:
                 result_entry["has_album_match"] = best_candidate.get("has_album_match", False)
 
         if files_queued > 0:
             result_entry["status"] = "enqueued"
             result_entry["files_queued"] = files_queued
-
-            if _album_preferred_search and not result_entry.get("has_album_match", True):
-                result_entry[
-                    "message"
-                ] = f"Enqueued {files_queued} file(s); awaiting download reconciliation [FALLBACK - no album match]"
-            else:
-                result_entry["message"] = (
-                    f"Enqueued {files_queued} file(s); awaiting download reconciliation"
-                )
+            result_entry["message"] = (
+                f"Enqueued {files_queued} file(s); awaiting download reconciliation"
+            )
 
             _results_log.append(result_entry)
             return True
@@ -623,11 +599,10 @@ async def process_csv(csv_file, start_row=0, retry_failed=False):
         logger.info(f"Failed: {_stats.failed}")
         logger.info(f"Total files enqueued: {_stats.enqueued_files}")
 
-        if not _skip_download_reconcile:
-            await wait_and_reconcile_downloads(
-                _results_log, settle_seconds=_download_settle_seconds
-            )
-            _stats.recalculate_from_results(_results_log)
+        await wait_and_reconcile_downloads(
+            _results_log, settle_seconds=_download_settle_seconds
+        )
+        _stats.recalculate_from_results(_results_log)
 
         logger.info(
             f"After reconciliation — successful downloads: {_stats.successful}, "
