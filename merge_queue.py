@@ -6,10 +6,14 @@ Steps (local calendar date ``YYYYMMDD``):
 
 1. Require ``YYYYMMDD-spotify-export.csv`` (fail if missing; never wipe the queue).
 2. If ``to_queue.csv`` exists, copy it to ``YYYYMMDD-to_queue.csv`` (overwrite OK).
-3. Load backup rows (from ``YYYYMMDD-to_queue.csv`` if that file exists from step 2)
-   then append rows from the Spotify export. Order: existing queue first, new imports last.
-4. Sanitize ``artist`` / ``album`` / ``track`` with ``slskd_sanitize.sanitize_queue_field``
-   and write ``to_queue.csv`` as UTF-8 with BOM (atomic replace).
+3. Filter export rows by per-playlist ``added_at`` watermarks (``merge_state.json``) and
+   ``success_ledger.csv`` unless ``--force-full-import``.
+4. Load backup rows, then append filtered Spotify export rows (existing queue first).
+5. Normalize ``artist`` (Track B N1: primary before ``;``), then sanitize names; pass through
+   ``duration_ms``, ``spotify_track_id``, ``is_unavailable`` when present.
+6. Dedupe with hybrid key: ``spotify_track_id`` when set, else sanitized (artist, album, track).
+   Queue rows win; duplicate export rows are skipped.
+7. Write wide ``to_queue.csv`` as UTF-8 with BOM (atomic replace); advance watermarks.
 
 Pipeline CSVs must be UTF-8 (optional BOM). No transcoding.
 
@@ -18,6 +22,7 @@ Usage::
     python3 merge_queue.py
     python3 merge_queue.py --workspace /path/to/repo
     python3 merge_queue.py --date 20260510 --dry-run
+    python3 merge_queue.py --force-full-import
 """
 
 from __future__ import annotations
@@ -29,12 +34,33 @@ import sys
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Set, Tuple
 
 from slskd_csv import atomic_write_pipeline_csv, decode_pipeline_text
+from slskd_pipeline_state import (
+    advance_watermarks_from_export,
+    filter_export_for_merge,
+    load_ledger_keys,
+    load_merge_state,
+    pipeline_row_dedupe_key,
+    save_merge_state,
+)
+from slskd_normalize import normalize_queue_row
 from slskd_sanitize import sanitize_queue_field
 
 QUEUE_FILENAME = "to_queue.csv"
+
+# Wide queue contract (Track A). Extra export columns (disc_number, added_at, …) are not stored yet.
+QUEUE_CSV_COLUMNS: Tuple[str, ...] = (
+    "artist",
+    "album",
+    "track",
+    "duration_ms",
+    "spotify_track_id",
+    "is_unavailable",
+)
+
+DedupeKey = Tuple[str, ...]
 
 
 def _die(msg: str, code: int = 1) -> None:
@@ -65,7 +91,42 @@ def _validate_headers(fieldnames: Iterable[str] | None) -> None:
         _die(f"CSV must have columns {sorted(required)}, got {sorted(lower)}")
 
 
-def _load_rows(path: Path) -> List[Dict[str, str]]:
+def _boolish_field(raw: str) -> str:
+    s = (raw or "").strip().lower()
+    if s in ("true", "1", "yes"):
+        return "true"
+    if s in ("false", "0", "no"):
+        return "false"
+    return s
+
+
+def _sanitize_pipeline_row(row: Dict[str, str]) -> Dict[str, str]:
+    """Normalize (Track B), then file hygiene on names; pass through identity fields."""
+    row = normalize_queue_row(dict(row))
+    return {
+        "artist": sanitize_queue_field(row.get("artist", "")),
+        "album": sanitize_queue_field(row.get("album", "")),
+        "track": sanitize_queue_field(row.get("track", "")),
+        "duration_ms": (row.get("duration_ms") or "").strip(),
+        "spotify_track_id": (row.get("spotify_track_id") or "").strip(),
+        "is_unavailable": _boolish_field(row.get("is_unavailable", "")),
+    }
+
+
+def _export_row_to_queue_shape(row: Dict[str, str]) -> Dict[str, str]:
+    return _sanitize_pipeline_row(
+        {
+            "artist": row.get("artist", ""),
+            "album": row.get("album", ""),
+            "track": row.get("track", ""),
+            "duration_ms": row.get("duration_ms", ""),
+            "spotify_track_id": row.get("spotify_track_id", ""),
+            "is_unavailable": row.get("is_unavailable", ""),
+        }
+    )
+
+
+def _load_queue_rows(path: Path) -> List[Dict[str, str]]:
     text = decode_pipeline_text(Path(path).read_bytes())
     dr = csv.DictReader(StringIO(text))
     raw_rows = list(dr)
@@ -81,26 +142,85 @@ def _load_rows(path: Path) -> List[Dict[str, str]]:
         if not artist:
             print(f"Warning: skipping row with missing artist in {path}: {row!r}", file=sys.stderr)
             continue
-        out.append({"artist": artist, "album": album, "track": track})
+        loaded = {
+            "artist": artist,
+            "album": album,
+            "track": track,
+            "duration_ms": n.get("duration_ms", ""),
+            "spotify_track_id": n.get("spotify_track_id", ""),
+            "is_unavailable": n.get("is_unavailable", ""),
+        }
+        out.append(_sanitize_pipeline_row(loaded))
     return out
 
 
-def _sanitize_rows(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+def _load_export_rows(path: Path) -> List[Dict[str, str]]:
+    """Load export CSV rows with ``playlist_id`` and ``added_at`` for merge filtering."""
+    text = decode_pipeline_text(Path(path).read_bytes())
+    dr = csv.DictReader(StringIO(text))
+    raw_rows = list(dr)
+    _validate_headers(dr.fieldnames)
     out: List[Dict[str, str]] = []
-    for row in rows:
-        out.append(
+    for row in raw_rows:
+        n = _norm_keys(row)
+        artist = n.get("artist", "")
+        album = n.get("album", "")
+        track = n.get("track", "")
+        if not artist and not album and not track:
+            continue
+        if not artist:
+            print(f"Warning: skipping row with missing artist in {path}: {row!r}", file=sys.stderr)
+            continue
+        queue_row = _export_row_to_queue_shape(
             {
-                "artist": sanitize_queue_field(row["artist"]),
-                "album": sanitize_queue_field(row["album"]),
-                "track": sanitize_queue_field(row["track"]),
+                "artist": artist,
+                "album": album,
+                "track": track,
+                "duration_ms": n.get("duration_ms", ""),
+                "spotify_track_id": n.get("spotify_track_id", ""),
+                "is_unavailable": n.get("is_unavailable", ""),
             }
         )
+        queue_row["playlist_id"] = n.get("playlist_id", "")
+        queue_row["added_at"] = n.get("added_at", "")
+        out.append(queue_row)
     return out
+
+
+def merge_rows_with_dedupe(
+    existing: List[Dict[str, str]],
+    incoming: List[Dict[str, str]],
+) -> Tuple[List[Dict[str, str]], int]:
+    """
+    Keep all existing rows (first wins), then append incoming rows with new dedupe keys.
+
+    Returns (merged_rows, skipped_duplicate_incoming_count).
+    """
+    seen: Set[DedupeKey] = set()
+    merged: List[Dict[str, str]] = []
+
+    for row in existing:
+        key = pipeline_row_dedupe_key(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+
+    skipped = 0
+    for row in incoming:
+        key = pipeline_row_dedupe_key(row)
+        if key in seen:
+            skipped += 1
+            continue
+        seen.add(key)
+        merged.append(_export_row_to_queue_shape(row))
+
+    return merged, skipped
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Merge YYYYMMDD-spotify-export.csv into to_queue.csv (sanitized, UTF-8 BOM)."
+        description="Merge YYYYMMDD-spotify-export.csv into to_queue.csv (sanitized, deduped, UTF-8 BOM)."
     )
     parser.add_argument(
         "--workspace",
@@ -134,6 +254,11 @@ def main() -> None:
         help="Backup path for existing queue (default: <workspace>/<DATE>-to_queue.csv)",
     )
     parser.add_argument(
+        "--force-full-import",
+        action="store_true",
+        help="Ignore per-playlist added_at watermarks (ledger + dedupe still apply)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print planned row counts and exit without writing files",
@@ -159,16 +284,26 @@ def main() -> None:
     rows_backup: List[Dict[str, str]] = []
     if queue_path.is_file():
         shutil.copy2(queue_path, backup_path)
-        rows_backup = _load_rows(backup_path)
+        rows_backup = _load_queue_rows(backup_path)
 
-    rows_spotify = _load_rows(spotify_path)
-    combined = rows_backup + rows_spotify
-    sanitized = _sanitize_rows(combined)
+    export_rows = _load_export_rows(spotify_path)
+    merge_state = load_merge_state(workspace)
+    ledger_keys = load_ledger_keys(workspace)
+    rows_spotify, filter_stats = filter_export_for_merge(
+        export_rows,
+        ledger_keys,
+        merge_state,
+        force_full_import=args.force_full_import,
+    )
+    merged, deduped_spotify = merge_rows_with_dedupe(rows_backup, rows_spotify)
 
     print(
         f"merge_queue: date={date_str} backup_rows={len(rows_backup)} "
-        f"spotify_rows={len(rows_spotify)} combined={len(combined)} "
-        f"after_skip={len(sanitized)}",
+        f"export_rows={filter_stats.export_rows_in} "
+        f"skipped_watermark={filter_stats.skipped_watermark} "
+        f"skipped_ledger={filter_stats.skipped_ledger} "
+        f"spotify_rows={filter_stats.export_rows_kept} "
+        f"deduped_spotify={deduped_spotify} written={len(merged)}",
         file=sys.stderr,
     )
 
@@ -176,8 +311,10 @@ def main() -> None:
         print("Dry-run: not writing files.", file=sys.stderr)
         return
 
-    atomic_write_pipeline_csv(queue_path, sanitized)
-    print(f"Wrote {len(sanitized)} rows to {queue_path}")
+    atomic_write_pipeline_csv(queue_path, merged, fieldnames=QUEUE_CSV_COLUMNS)
+    advance_watermarks_from_export(merge_state, export_rows, merge_date=date_str)
+    save_merge_state(workspace, merge_state)
+    print(f"Wrote {len(merged)} rows to {queue_path}")
 
 
 if __name__ == "__main__":
