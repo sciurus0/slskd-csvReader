@@ -6,9 +6,16 @@
 !/data/.gitkeep
 !/data/exports/
 !/data/exports/.gitkeep
+# Secrets and local config (never commit)
 /api.txt
+.env
+.env.*
+!.env.example
+spotify_tokens.json
+tokens.json
 
-# Local planning doc (not tracked)
+# Local IDE / agent config and planning (not tracked)
+.cursor/
 PROJECT_PLAN.md
 
 # CSV pipeline data (exports, queues, reports — not tracked)
@@ -17,6 +24,9 @@ PROJECT_PLAN.md
 
 # Cross-run merge watermarks (ledger is *.csv)
 merge_state.json
+
+# Runtime logs (fixtures use committed .txt excerpts)
+*.log
 
 # Python bytecode (keep repo to source only)
 __pycache__/

@@ -44,6 +44,10 @@ Environment variables override `api.txt` when set (`SLSKD_API_KEY`, `SPOTIFY_CLI
 
 First Spotify run opens a browser (or prints an authorize URL with `--no-browser`). Tokens cache under `~/.config/slskd/spotify_tokens.json` by default.
 
+### Do not commit
+
+Keep credentials and runtime artifacts out of git (see `.gitignore`): `api.txt`, `.env` files, Spotify token JSON (`spotify_tokens.json`, `tokens.json`), `data/` queues and logs, `*.csv` outside `fixtures/`, `.cursor/`, and `PROJECT_PLAN.md`. Prefer env vars or `api.txt` for secrets; leave the default token cache under `~/.config/slskd/`.
+
 ## Golden path
 
 From the **DEV** repo root (scripts default to `./data/`):
