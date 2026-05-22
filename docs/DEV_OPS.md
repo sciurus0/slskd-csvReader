@@ -10,9 +10,9 @@ Use these daily; ignore the rest unless you have a specific recovery or tuning n
 
 | Tier | What | Examples |
 | --- | --- | --- |
-| **Golden** | End-to-end or queue processing | `run_pipeline.py --pick … -y`, `--resume -y`, `slskd_spotify.py --trim-queue`, `merge_queue.py` |
+| **Golden** | End-to-end or queue processing | `run_pipeline.py --pick … -y`, `--resume -y`, `slskd_spotify.py`, `merge_queue.py` |
 | **Tuning** | Rate, formats, debug | `slskd_spotify.py --delay`, `--formats`, `--batch-size`, `--download-settle-seconds` |
-| **Hygiene** | Trim queue or drop ephemeral CSVs | `trim_queue.py`, `pipeline_cleanup.py --ephemeral` |
+| **Hygiene** | Manual trim or drop ephemeral CSVs | `trim_queue.py` (optional if you used `--no-trim-queue`), `pipeline_cleanup.py --ephemeral` |
 | **Recovery** | Fix a past run without re-searching | `slskd_spotify.py --reconcile-downloads`, `--gen-report`, `--retry-failed` |
 
 `slskd_spotify.py --help` groups flags: golden path, tuning, recovery.
@@ -40,7 +40,7 @@ Everything else is derived or ephemeral.
 | `data/logs/` | Import logs and `results_*.csv` reports |
 | `data/archive/csv-YYYYMMDD/` | Dated backups before merge or trim |
 
-Do not treat `data/to_queue_pending.csv` as a second source of truth. After a full run it lists what still failed; the next full run should start from `data/to_queue.csv` (often after `--trim-queue`).
+Do not treat `data/to_queue_pending.csv` as a second source of truth. After a full run it lists what still failed; the next full run should start from `data/to_queue.csv` (trimmed automatically after each slskd run unless you pass `--no-trim-queue`).
 
 ## Typical flows
 
@@ -56,12 +56,12 @@ Writes export to `data/exports/`, merges into `data/to_queue.csv`, optionally ru
 ### Process the queue
 
 ```bash
-python3 slskd_spotify.py --csv data/to_queue.csv --trim-queue
+python3 slskd_spotify.py --csv data/to_queue.csv
 ```
 
 - Searches each row, reconciles downloads, appends successes to `data/success_ledger.csv`
 - Writes `data/to_queue_pending.csv` (failures)
-- With `--trim-queue`, rewrites `data/to_queue.csv` minus ledger keys (backup in `data/archive/`)
+- By default rewrites `data/to_queue.csv` minus ledger keys (backup in `data/archive/`). Use `--no-trim-queue` to skip trim (debug only).
 
 ### Resume a long run
 
@@ -86,7 +86,7 @@ python3 trim_queue.py
 python3 trim_queue.py --dry-run
 ```
 
-Same idea as `--trim-queue`: drop ledger keys and dedupe; backup under `data/archive/`.
+Same trim as the default slskd post-run step: drop ledger keys and dedupe; backup under `data/archive/`.
 
 ### Clean ephemeral pending files
 
@@ -111,7 +111,7 @@ Otherwise the column appears automatically the next time slskd appends successes
 | Action | When | Effect on `to_queue.csv` |
 | --- | --- | --- |
 | **merge_queue** | New Spotify export | Adds new rows (watermark + ledger filter); dedupes |
-| **trim_queue** / **--trim-queue** | After downloads | Removes ledger successes; dedupes |
+| **trim_queue** / default slskd trim | After downloads | Removes ledger successes; dedupes |
 | **pending CSV** | After slskd run | Does not change `to_queue.csv`; report of failures only |
 
 ## SRCH regression slice

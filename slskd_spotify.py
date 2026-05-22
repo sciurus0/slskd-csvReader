@@ -66,10 +66,11 @@ queued_files_tracker = []  # Global list to track all queued files for status ch
 
 _GOLDEN_EPILOG = """
 Golden path (from repo root):
-  python3 slskd_spotify.py --trim-queue
+  python3 slskd_spotify.py
   python3 slskd_spotify.py --resume
 
-See docs/DEV_OPS.md for merge, trim, pending CSV, and legacy flags.
+After each run, to_queue.csv is trimmed against success_ledger.csv (use --no-trim-queue to skip).
+See docs/DEV_OPS.md for merge, pending CSV, and recovery flags.
 """
 
 
@@ -93,9 +94,9 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Resume from checkpoint (default: data/checkpoint.pkl)",
     )
     golden.add_argument(
-        "--trim-queue",
+        "--no-trim-queue",
         action="store_true",
-        help="After run: rewrite input CSV minus success ledger (see trim_queue.py)",
+        help="Do not rewrite input CSV minus success ledger after reconciliation (debug only)",
     )
     golden.add_argument(
         "--checkpoint-file",
@@ -252,6 +253,7 @@ async def _run_reconcile_downloads_mode(args: argparse.Namespace) -> None:
         stats=reconcile_stats,
         write_pending_csv=not args.skip_pending_csv,
         pending_csv_path=args.pending_csv,
+        trim_queue_after_run=not args.no_trim_queue,
     )
 
 
@@ -344,7 +346,7 @@ async def main():
         download_settle_seconds=args.download_settle_seconds,
         write_pending_csv=not args.skip_pending_csv,
         pending_csv_path=args.pending_csv,
-        trim_queue_after_run=args.trim_queue,
+        trim_queue_after_run=not args.no_trim_queue,
     )
 
     try:
