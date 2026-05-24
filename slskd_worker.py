@@ -143,6 +143,7 @@ async def reconcile_downloads_only(
     stats: Optional[Any] = None,
     write_pending_csv: bool = True,
     pending_csv_path: Optional[str] = None,
+    trim_queue_after_run: bool = True,
 ) -> bool:
     """
     Poll SLSKD for download completion and refresh results/report from saved state.
@@ -198,6 +199,18 @@ async def reconcile_downloads_only(
             logger.info("Removed ephemeral pending CSV: %s", path)
     if appended:
         logger.info("Appended %d row(s) to success ledger", appended)
+
+    if trim_queue_after_run:
+        from trim_queue import trim_queue_workspace
+
+        stats = trim_queue_workspace(workspace, dry_run=False, backup=True)
+        logger.info(
+            "Trimmed to_queue.csv: %d in → %d out (ledger=%d, dupes=%d)",
+            stats.rows_in,
+            stats.rows_out,
+            stats.skipped_ledger,
+            stats.skipped_duplicate,
+        )
 
     total_rows = len(results_log)
     save_checkpoint(

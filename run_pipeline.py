@@ -92,9 +92,8 @@ def build_pipeline_plan(
             "checkpoint.pkl",
             "success_ledger.csv (on downloads)",
             "to_queue_pending.csv",
+            "to_queue.csv (trimmed vs ledger)",
         )
-        if resume:
-            slskd_writes += ("to_queue.csv (trim/reconcile may update)",)
         return [
             PipelineStagePlan("spotify", "Spotify export", StageAction.SKIP),
             PipelineStagePlan("merge", "merge_queue", StageAction.SKIP),
@@ -126,7 +125,7 @@ def build_pipeline_plan(
             "checkpoint.pkl",
             "success_ledger.csv",
             "to_queue_pending.csv",
-            "to_queue.csv (if --trim-queue)",
+            "to_queue.csv (trimmed vs ledger)",
         )
     )
     return [
@@ -368,7 +367,7 @@ def build_slskd_argv(
     checkpoint_path: Path,
     download_settle_seconds: Optional[float],
     skip_pending_csv: bool,
-    trim_queue: bool,
+    no_trim_queue: bool,
 ) -> List[str]:
     args = [
         "--csv",
@@ -384,8 +383,8 @@ def build_slskd_argv(
         args.extend(["--download-settle-seconds", str(download_settle_seconds)])
     if skip_pending_csv:
         args.append("--skip-pending-csv")
-    if trim_queue:
-        args.append("--trim-queue")
+    if no_trim_queue:
+        args.append("--no-trim-queue")
     return args
 
 
@@ -499,9 +498,9 @@ def main() -> None:
         help=f"Checkpoint pickle for slskd resume (default: <workspace>/{CHECKPOINT_BASENAME})",
     )
     parser.add_argument(
-        "--trim-queue",
+        "--no-trim-queue",
         action="store_true",
-        help="Passed to slskd_spotify.py after reconciliation",
+        help="Passed to slskd_spotify.py: skip ledger trim after reconciliation (debug only)",
     )
     parser.add_argument(
         "--continue-on-export-error",
@@ -571,7 +570,7 @@ def main() -> None:
             checkpoint_path=checkpoint_path,
             download_settle_seconds=args.download_settle_seconds,
             skip_pending_csv=args.skip_pending_csv,
-            trim_queue=args.trim_queue,
+            no_trim_queue=args.no_trim_queue,
         )
         stage_seconds.append(
             (
@@ -720,7 +719,7 @@ def main() -> None:
         checkpoint_path=checkpoint_path,
         download_settle_seconds=args.download_settle_seconds,
         skip_pending_csv=args.skip_pending_csv,
-        trim_queue=args.trim_queue,
+        no_trim_queue=args.no_trim_queue,
     )
     stage_seconds.append(
         (

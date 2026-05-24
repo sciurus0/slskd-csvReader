@@ -29,6 +29,7 @@ class TestRunPipelinePlan(unittest.TestCase):
         self.assertEqual(stages[1].action, StageAction.RUN)
         self.assertEqual(stages[2].action, StageAction.RUN)
         self.assertIn("to_queue.csv", stages[1].writes[1])
+        self.assertIn("trimmed", stages[2].writes[-1])
 
     def test_dry_run_merge_preview_only(self) -> None:
         ws = Path("/tmp/ws")
