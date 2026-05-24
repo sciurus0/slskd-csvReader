@@ -86,7 +86,16 @@ from datetime import datetime
 from pathlib import Path
 
 from slskd_export_paths import default_new_export_path
-from slskd_workspace import default_workspace, ensure_workspace_layout
+from slskd_saved_playlists import (
+    entries_for_export,
+    entries_from_playlist_ids,
+    load_saved_playlists,
+    merge_library_picks_into_saved,
+    parse_playlist_id_csv,
+    print_saved_playlists,
+    save_saved_playlists,
+)
+from slskd_workspace import default_workspace, ensure_workspace_layout, resolve_workspace
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -911,6 +920,35 @@ def main() -> None:
         "Examples: --pick 3 or --pick 1,4,7 (combined into one output CSV)",
     )
     parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="Pipeline data directory for saved_playlists.json (default: ./data/)",
+    )
+    parser.add_argument(
+        "--saved",
+        nargs="?",
+        const="",
+        metavar="N[,N...]",
+        help="Export saved playlists by ID (all enabled, or indices into saved list)",
+    )
+    parser.add_argument(
+        "--playlist-id",
+        metavar="ID[,ID...]",
+        default=None,
+        help="Export playlist(s) by Spotify ID or URL (comma-separated)",
+    )
+    parser.add_argument(
+        "--list-saved",
+        action="store_true",
+        help="List saved playlists and exit",
+    )
+    parser.add_argument(
+        "--no-save-picks",
+        action="store_true",
+        help="With --pick, do not update saved_playlists.json",
+    )
+    parser.add_argument(
         "--token-cache",
         default=os.environ.get("SPOTIFY_TOKEN_CACHE"),
         type=Path,
@@ -941,6 +979,13 @@ def main() -> None:
         _die("Specify either a playlist URL/ID or --pick N, not both.")
     if args.list_playlists and args.pick is not None:
         _die("Do not combine --list-playlists with --pick.")
+    if sum(bool(x) for x in (args.pick, args.saved is not None, args.playlist_id, args.playlist)) > 1:
+        _die("Use only one of playlist URL/ID, --pick, --saved, or --playlist-id.")
+
+    workspace = resolve_workspace(args.workspace)
+    if args.list_saved:
+        print_saved_playlists(load_saved_playlists(workspace))
+        return
 
     if args.list is not None:
         if args.list < 1:
@@ -1018,7 +1063,51 @@ def main() -> None:
         print(f"Tokens saved to {token_path}", file=sys.stderr)
         return
 
-    if args.pick is not None:
+    if args.saved is not None:
+        ensure_workspace_layout(workspace)
+        saved = load_saved_playlists(workspace)
+        if not saved.get("playlists"):
+            _die("No saved playlists; use --pick once to populate saved_playlists.json.")
+        if args.saved == "":
+            targets = entries_for_export(saved)
+        else:
+            indices = parse_pick_indices(args.saved)
+            try:
+                targets = entries_for_export(saved, pick_indices=indices)
+            except IndexError as e:
+                _die(str(e))
+        all_rows = []
+        for ent in targets:
+            pid = ent["id"]
+            label = ent.get("name") or pid
+            rows = fetch_playlist_track_rows(access_token, pid)
+            print(f"Saved ({label}): {len(rows)} rows", file=sys.stderr)
+            all_rows.extend(rows)
+        if not all_rows:
+            print(
+                "Warning: no tracks exported (empty playlist(s) or no readable tracks).",
+                file=sys.stderr,
+            )
+        write_csv(args.output, all_rows)
+        print(f"Wrote {len(all_rows)} rows to {args.output}")
+    elif args.playlist_id:
+        try:
+            ids = parse_playlist_id_csv(args.playlist_id)
+        except ValueError as e:
+            _die(str(e))
+        all_rows = []
+        for pid in ids:
+            rows = fetch_playlist_track_rows(access_token, pid)
+            print(f"Playlist {pid}: {len(rows)} rows", file=sys.stderr)
+            all_rows.extend(rows)
+        if not all_rows:
+            print(
+                "Warning: no tracks exported (empty playlist(s) or no readable tracks).",
+                file=sys.stderr,
+            )
+        write_csv(args.output, all_rows)
+        print(f"Wrote {len(all_rows)} rows to {args.output}")
+    elif args.pick is not None:
         pick_indices = parse_pick_indices(args.pick)
         max_index = max(pick_indices)
         playlists = fetch_user_playlists(access_token, max_playlists=max_index)
@@ -1036,6 +1125,12 @@ def main() -> None:
             rows = fetch_playlist_track_rows(access_token, playlist_id)
             print(f"Playlist #{idx} ({label}): {len(rows)} rows", file=sys.stderr)
             all_rows.extend(rows)
+        if not args.no_save_picks:
+            ensure_workspace_layout(workspace)
+            saved = load_saved_playlists(workspace)
+            merge_library_picks_into_saved(saved, playlists, pick_indices)
+            save_saved_playlists(workspace, saved)
+            print(f"Updated {workspace / 'saved_playlists.json'}", file=sys.stderr)
         if not all_rows:
             print(
                 "Warning: no tracks exported (empty playlist(s) or no readable tracks).",

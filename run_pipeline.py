@@ -13,6 +13,9 @@ Examples:
     python3 run_pipeline.py --resume -y
     python3 run_pipeline.py --slskd-only --csv data/to_queue_pending.csv -y
     python3 run_pipeline.py --pick 1,4,7 --continue-on-export-error -y
+    python3 run_pipeline.py --saved -y
+    python3 run_pipeline.py --saved 1,3 -y
+    python3 run_pipeline.py --playlist-id 37i9dQZF1DXcBWIGoYBM5M -y
 """
 
 from __future__ import annotations
@@ -30,6 +33,15 @@ from typing import Any, Dict, List, Optional, Tuple
 from slskd_config import CHECKPOINT_BASENAME, load_api_txt
 from slskd_csv import checkpoint_resume_row, load_checkpoint
 from slskd_export_paths import default_new_export_path, parse_export_date
+from slskd_saved_playlists import (
+    entries_for_export,
+    entries_from_playlist_ids,
+    load_saved_playlists,
+    merge_library_picks_into_saved,
+    parse_playlist_id_csv,
+    print_saved_playlists,
+    save_saved_playlists,
+)
 from slskd_workspace import (
     ensure_workspace_layout,
     logs_dir,
@@ -157,6 +169,7 @@ def format_pipeline_plan(
     dry_run: bool,
     force_full_import: bool,
     continue_on_export_error: bool = False,
+    export_mode: Optional[str] = None,
 ) -> List[str]:
     """Compact one-line plan plus optional modifier notes."""
     flow: List[str] = []
@@ -179,6 +192,8 @@ def format_pipeline_plan(
         mods.append("continue-on-export-error")
     if force_full_import:
         mods.append("force-full-import")
+    if export_mode:
+        mods.append(export_mode)
     if mods:
         lines.append(f"  options: {', '.join(mods)}")
     return lines
@@ -257,49 +272,47 @@ def _summarize_export_failures(failures: Tuple[str, ...]) -> None:
         print(f"  - {msg}", file=sys.stderr)
 
 
-def export_playlists(
+def export_playlist_entries(
     access_token: str,
-    playlists: List[Dict[str, Any]],
-    pick_indices: List[int],
+    entries: List[Dict[str, Any]],
     output_path: Path,
     *,
     continue_on_error: bool = False,
 ) -> ExportResult:
-    """Export selected playlists into one combined CSV (RUN-04)."""
-    max_index = max(pick_indices)
-    if max_index > len(playlists):
-        _die(f"Pick {max_index} is out of range (you have {len(playlists)} playlists).")
+    """Export playlists by Spotify ID (RUN-04, GOAL-04)."""
+    if not entries:
+        _die("No playlists selected for export.")
 
     all_rows: List[Dict[str, str]] = []
     failures: List[str] = []
-    for idx in pick_indices:
-        pl = playlists[idx - 1]
+    for slot, pl in enumerate(entries, start=1):
         playlist_id = (pl.get("id") or "").strip()
-        label = pl.get("name") or playlist_id or f"#{idx}"
+        label = pl.get("name") or playlist_id or f"#{slot}"
+        display = pl.get("list_label") or label
         if not playlist_id:
-            msg = f"#{idx} ({label}): no playlist id"
+            msg = f"{display}: no playlist id"
             if continue_on_error:
                 failures.append(msg)
                 print(f"  Skipped export: {msg}", file=sys.stderr)
                 continue
-            _die(f"Playlist #{idx} has no id; cannot export.")
+            _die(f"Playlist {display} has no id; cannot export.")
         try:
             rows = fetch_playlist_track_rows(access_token, playlist_id)
         except Exception as e:
             if continue_on_error:
-                msg = f"#{idx} ({label}): {e}"
+                msg = f"{display}: {e}"
                 failures.append(msg)
                 print(f"  Skipped export: {msg}", file=sys.stderr)
                 continue
-            _die(f"Export failed for playlist #{idx} ({label}): {e}")
-        print(f"  Playlist #{idx} ({label}): {len(rows)} rows", file=sys.stderr)
+            _die(f"Export failed for {display}: {e}")
+        print(f"  {display}: {len(rows)} rows", file=sys.stderr)
         all_rows.extend(rows)
 
     if failures:
         _summarize_export_failures(tuple(failures))
 
     if not all_rows:
-        if failures and len(failures) == len(pick_indices):
+        if failures and len(failures) == len(entries):
             _die(
                 "All selected playlist(s) failed to export; "
                 "fix errors or retry without --continue-on-export-error."
@@ -310,6 +323,31 @@ def export_playlists(
         )
     write_csv(str(output_path), all_rows)
     return ExportResult(len(all_rows), tuple(failures))
+
+
+def export_playlists(
+    access_token: str,
+    playlists: List[Dict[str, Any]],
+    pick_indices: List[int],
+    output_path: Path,
+    *,
+    continue_on_error: bool = False,
+) -> ExportResult:
+    """Export library picks (1-based index into *playlists* listing)."""
+    max_index = max(pick_indices)
+    if max_index > len(playlists):
+        _die(f"Pick {max_index} is out of range (you have {len(playlists)} playlists).")
+    entries: List[Dict[str, Any]] = []
+    for idx in pick_indices:
+        pl = dict(playlists[idx - 1])
+        pl["list_label"] = f"#{idx} ({pl.get('name') or pl.get('id') or '?'})"
+        entries.append(pl)
+    return export_playlist_entries(
+        access_token,
+        entries,
+        output_path,
+        continue_on_error=continue_on_error,
+    )
 
 
 def _run_python_step(
@@ -414,7 +452,30 @@ def main() -> None:
         "--pick",
         metavar="N[,N...]",
         default=None,
-        help="Skip interactive prompt; export these 1-based playlist indices",
+        help="Export by 1-based index from Spotify library list (updates saved playlists unless --no-save-picks)",
+    )
+    parser.add_argument(
+        "--saved",
+        nargs="?",
+        const="",
+        metavar="N[,N...]",
+        help="Export saved playlists by Spotify ID (all enabled, or 1-based indices into saved list)",
+    )
+    parser.add_argument(
+        "--playlist-id",
+        metavar="ID[,ID...]",
+        default=None,
+        help="Export playlist(s) by Spotify ID or URL (does not update saved playlists)",
+    )
+    parser.add_argument(
+        "--list-saved",
+        action="store_true",
+        help="List saved playlists from saved_playlists.json and exit",
+    )
+    parser.add_argument(
+        "--no-save-picks",
+        action="store_true",
+        help="With library pick/export, do not update data/saved_playlists.json",
     )
     parser.add_argument(
         "--date",
@@ -512,8 +573,15 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if sum(bool(x) for x in (args.pick, args.saved is not None, args.playlist_id)) > 1:
+        _die("Use only one of --pick, --saved, or --playlist-id for export selection.")
+
     workspace = resolve_workspace(args.workspace)
     ensure_workspace_layout(workspace)
+
+    if args.list_saved:
+        print_saved_playlists(load_saved_playlists(workspace))
+        return
 
     try:
         export_path, date_str = default_new_export_path(
@@ -524,6 +592,11 @@ def main() -> None:
     queue_path = (args.csv or queue_csv_path(workspace)).resolve()
     checkpoint_path = _checkpoint_path(workspace, args.checkpoint_file)
     slskd_only = args.resume or args.slskd_only
+    export_mode_note: Optional[str] = None
+    if args.saved is not None:
+        export_mode_note = "saved-playlists"
+    elif args.playlist_id:
+        export_mode_note = "playlist-id"
 
     if args.resume and args.slskd_only:
         print("Note: --slskd-only is implied by --resume.", file=sys.stderr)
@@ -544,6 +617,7 @@ def main() -> None:
             dry_run=args.dry_run,
             force_full_import=args.force_full_import,
             continue_on_export_error=args.continue_on_export_error,
+            export_mode=export_mode_note,
         )
     )
     stage_seconds: List[tuple[str, float]] = []
@@ -620,34 +694,94 @@ def main() -> None:
     )
     _enforce_throttle_cooldown(DEFAULT_THROTTLE_CACHE)
 
-    print("\nYour playlists:", file=sys.stderr)
-    playlists = fetch_user_playlists(access_token, resolve_track_counts=False)
-    print_user_playlists(playlists)
-    if not playlists:
-        _die("No playlists returned; nothing to export.")
-
-    if args.pick is not None:
+    if args.saved is not None:
+        saved = load_saved_playlists(workspace)
+        if not saved.get("playlists"):
+            _die(
+                "No saved playlists in saved_playlists.json. "
+                "Run once with --pick or interactive pick to populate it."
+            )
+        print("\nSaved playlists:", file=sys.stderr)
+        print_saved_playlists(saved)
         try:
-            pick_indices = parse_pick_input(args.pick)
+            if args.saved == "":
+                export_entries = entries_for_export(saved)
+            else:
+                saved_pick = parse_pick_input(args.saved)
+                export_entries = entries_for_export(saved, pick_indices=saved_pick)
+        except IndexError as e:
+            _die(str(e))
+        if not export_entries:
+            _die("No enabled playlists to export (check saved_playlists.json).")
+        for i, ent in enumerate(export_entries, start=1):
+            ent["list_label"] = f"saved #{i} ({ent.get('name') or ent.get('id')})"
+        print(
+            f"\nExporting {len(export_entries)} saved playlist(s) → {export_path.name}",
+            file=sys.stderr,
+        )
+        export_result = export_playlist_entries(
+            access_token,
+            export_entries,
+            export_path,
+            continue_on_error=args.continue_on_export_error,
+        )
+    elif args.playlist_id:
+        try:
+            ids = parse_playlist_id_csv(args.playlist_id)
         except ValueError as e:
             _die(str(e))
-        bad = [i for i in pick_indices if i > len(playlists)]
-        if bad:
-            _die(f"--pick out of range: {bad} (listed {len(playlists)} playlists).")
+        export_entries = entries_from_playlist_ids(ids)
+        for i, ent in enumerate(export_entries, start=1):
+            ent["list_label"] = f"id {ent['id']}"
+        print(
+            f"\nExporting {len(export_entries)} playlist(s) by ID → {export_path.name}",
+            file=sys.stderr,
+        )
+        export_result = export_playlist_entries(
+            access_token,
+            export_entries,
+            export_path,
+            continue_on_error=args.continue_on_export_error,
+        )
     else:
-        pick_indices = prompt_playlist_picks(len(playlists))
+        print("\nYour playlists:", file=sys.stderr)
+        playlists = fetch_user_playlists(access_token, resolve_track_counts=False)
+        print_user_playlists(playlists)
+        if not playlists:
+            _die("No playlists returned; nothing to export.")
 
-    print(
-        f"\nExporting playlist(s) {pick_indices} → {export_path.name}",
-        file=sys.stderr,
-    )
-    export_result = export_playlists(
-        access_token,
-        playlists,
-        pick_indices,
-        export_path,
-        continue_on_error=args.continue_on_export_error,
-    )
+        if args.pick is not None:
+            try:
+                pick_indices = parse_pick_input(args.pick)
+            except ValueError as e:
+                _die(str(e))
+            bad = [i for i in pick_indices if i > len(playlists)]
+            if bad:
+                _die(f"--pick out of range: {bad} (listed {len(playlists)} playlists).")
+        else:
+            pick_indices = prompt_playlist_picks(len(playlists))
+
+        print(
+            f"\nExporting playlist(s) {pick_indices} → {export_path.name}",
+            file=sys.stderr,
+        )
+        export_result = export_playlists(
+            access_token,
+            playlists,
+            pick_indices,
+            export_path,
+            continue_on_error=args.continue_on_export_error,
+        )
+        save_picks_after_export = not args.no_save_picks
+        if save_picks_after_export:
+            saved = load_saved_playlists(workspace)
+            merge_library_picks_into_saved(saved, playlists, pick_indices)
+            save_saved_playlists(workspace, saved)
+            print(
+                f"Updated {workspace / 'saved_playlists.json'} "
+                f"({len(saved.get('playlists') or [])} playlist(s)).",
+                file=sys.stderr,
+            )
     spotify_elapsed = time.monotonic() - t_spotify
     stage_seconds.append(("spotify_export", spotify_elapsed))
     fail_note = (
