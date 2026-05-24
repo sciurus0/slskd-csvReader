@@ -6,7 +6,7 @@ This repository is **not** the SLSKD app itself. You install and run SLSKD separ
 
 **Day-to-day operations** (resume, trim, recovery flags, logs): [docs/DEV_OPS.md](docs/DEV_OPS.md)
 
-**Platform:** This project is developed and run on **macOS** (paths and examples below assume that). The scripts use portable Python (`pathlib`, loopback OAuth, `http://localhost:5030`) and are expected to work on **Linux** and **Windows** with SLSKD installed, but those platforms are not documented or tested in-repo yet — see backlog **PLAT-01** in `PROJECT_PLAN.md`.
+**Platform:** This project is developed and run on **macOS** (paths and examples below assume that). The scripts use portable Python (`pathlib`, loopback OAuth, `http://localhost:5030`) and are expected to work on **Linux** and **Windows** with SLSKD installed, but those platforms are not documented or tested in-repo yet — see backlog **PLAT-01** on the [GitHub project board](https://github.com/users/sciurus0/projects/2).
 
 ---
 
