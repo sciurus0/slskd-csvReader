@@ -11,6 +11,36 @@ from unittest import mock
 import spotify_playlist_fetch as spf
 
 
+class TestOAuthRedirectHost(unittest.TestCase):
+    def test_loopback_host_accepted(self) -> None:
+        host, port = spf._redirect_host_port("http://127.0.0.1:8765/callback")
+        self.assertEqual(host, "127.0.0.1")
+        self.assertEqual(port, 8765)
+
+    def test_localhost_accepted(self) -> None:
+        host, port = spf._redirect_host_port("http://localhost:8765/callback")
+        self.assertEqual(host, "localhost")
+        self.assertEqual(port, 8765)
+
+    def test_non_loopback_rejected(self) -> None:
+        with self.assertRaises(SystemExit):
+            spf._redirect_host_port("http://0.0.0.0:8765/callback")
+
+    def test_https_rejected(self) -> None:
+        with self.assertRaises(SystemExit):
+            spf._redirect_host_port("https://127.0.0.1:8765/callback")
+
+
+class TestRedactSensitiveText(unittest.TestCase):
+    def test_redacts_token_fields_in_json(self) -> None:
+        body = json.dumps(
+            {"error": "bad", "access_token": "secret", "refresh_token": "rt"}
+        )
+        out = spf._redact_sensitive_text(body, max_len=500)
+        self.assertIn("***", out)
+        self.assertNotIn("secret", out)
+
+
 class TestOAuthCallbackPath(unittest.TestCase):
     def test_callback_path_from_redirect_uri(self) -> None:
         self.assertEqual(

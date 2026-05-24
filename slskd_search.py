@@ -101,7 +101,10 @@ async def _fetch_search_responses(job_id: str) -> List[Dict[str, Any]]:
     responses_url = f"{_host.rstrip('/')}{_api_path}/searches/{job_id}/responses"
     with concurrent.futures.ThreadPoolExecutor() as pool:
         resp = await asyncio.get_event_loop().run_in_executor(
-            pool, lambda: requests.get(responses_url, headers=_headers)
+            pool,
+            lambda: requests.get(
+                responses_url, headers=_headers, timeout=_search_timeout
+            ),
         )
     resp.raise_for_status()
     return _responses_from_search_payload(resp.json())
@@ -120,7 +123,10 @@ async def poll_responses_async(job_id):
         try:
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 resp = await asyncio.get_event_loop().run_in_executor(
-                    pool, lambda: requests.get(state_url, headers=_headers)
+                    pool,
+                    lambda: requests.get(
+                        state_url, headers=_headers, timeout=_search_timeout
+                    ),
                 )
             resp.raise_for_status()
             data = resp.json()
@@ -195,7 +201,10 @@ async def search_slskd_async(pattern):
                     asyncio.get_event_loop().run_in_executor(
                         pool,
                         lambda: requests.post(
-                            post_url, json={"SearchText": pattern}, headers=_headers
+                            post_url,
+                            json={"SearchText": pattern},
+                            headers=_headers,
+                            timeout=_search_timeout,
                         ),
                     ),
                     timeout=_search_timeout,

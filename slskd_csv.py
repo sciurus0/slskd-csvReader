@@ -231,7 +231,12 @@ def generate_report(
         os.makedirs(log_dir, exist_ok=True)
 
         with open(report_file, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=output_fieldnames)
+            writer = csv.DictWriter(
+                f,
+                fieldnames=output_fieldnames,
+                quoting=csv.QUOTE_ALL,
+                lineterminator="\n",
+            )
             writer.writeheader()
 
             for result in results_log:

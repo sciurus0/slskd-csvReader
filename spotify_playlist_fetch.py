@@ -218,7 +218,10 @@ def _spotify_get_json(
                     "\nNote: Spotify allows playlist items only for playlists you own or collaborate on; "
                     "playlists you only follow may appear in /me/playlists but return 403 here."
                 )
-            _die(f"{context} request failed ({r.status_code}): {r.text[:800]}{extra}")
+            _die(
+                f"{context} request failed ({r.status_code}): "
+                f"{_redact_sensitive_text(r.text, max_len=800)}{extra}"
+            )
 
         try:
             payload = r.json()
@@ -288,11 +291,53 @@ def _pkce_verifier_and_challenge() -> Tuple[str, str]:
     return verifier, challenge
 
 
+_OAUTH_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_REDACT_JSON_KEYS = frozenset(
+    {
+        "access_token",
+        "refresh_token",
+        "client_secret",
+        "token",
+        "authorization",
+    }
+)
+
+
+def _redact_sensitive_text(text: str, *, max_len: int = 400) -> str:
+    """SEC-07: strip token-like fields from API error bodies before logging."""
+    if not text:
+        return ""
+    snippet = text[:max_len]
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return snippet
+    if isinstance(data, dict):
+        redacted = {
+            k: "***" if str(k).lower() in _REDACT_JSON_KEYS else v
+            for k, v in data.items()
+        }
+        return json.dumps(redacted)[:max_len]
+    return snippet
+
+
 def _redirect_host_port(redirect_uri: str) -> Tuple[str, int]:
+    """SEC-02: OAuth callback must listen on loopback only."""
     p = urlparse(redirect_uri)
-    if p.scheme not in ("http", "https") or not p.hostname:
+    if p.scheme != "http":
+        _die(
+            f"OAuth redirect URI must use http:// for the local callback server, "
+            f"not {p.scheme!r}: {redirect_uri!r}"
+        )
+    if not p.hostname:
         _die(f"Invalid SPOTIFY_REDIRECT_URI / redirect URI: {redirect_uri!r}")
-    port = p.port or (443 if p.scheme == "https" else 80)
+    if p.hostname.lower() not in _OAUTH_LOOPBACK_HOSTS:
+        _die(
+            "OAuth redirect URI must use a loopback host "
+            "(127.0.0.1, localhost, or ::1), "
+            f"not {p.hostname!r}. Got: {redirect_uri!r}"
+        )
+    port = p.port or 80
     return p.hostname, port
 
 
@@ -422,7 +467,10 @@ def _exchange_code_for_tokens(
     r = requests.post(ACCOUNTS_TOKEN_URL, data=data, timeout=60)
     _debug_log(f"Token exchange response: HTTP {r.status_code}")
     if r.status_code != 200:
-        _die(f"Token exchange failed ({r.status_code}): {r.text[:800]}")
+        _die(
+            f"Token exchange failed ({r.status_code}): "
+            f"{_redact_sensitive_text(r.text, max_len=800)}"
+        )
     return r.json()
 
 
@@ -443,7 +491,8 @@ def _refresh_access_token(
     _debug_log(f"Token refresh response: HTTP {r.status_code}")
     if r.status_code != 200:
         print(
-            f"Refresh failed ({r.status_code}): {r.text[:400]}\n"
+            f"Refresh failed ({r.status_code}): "
+            f"{_redact_sensitive_text(r.text, max_len=400)}\n"
             "Will open interactive login.",
             file=sys.stderr,
         )
