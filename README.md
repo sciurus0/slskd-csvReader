@@ -104,12 +104,19 @@ Run an export (or full pipeline). The first time, a browser opens for Spotify OA
 From the repo root. Scripts use `./data/` as the workspace (created automatically).
 
 ```bash
-# List playlists, pick by number, then export → merge → download
+# First run: pick from library list (saves IDs to data/saved_playlists.json)
 python3 run_pipeline.py --pick 1,4,7 -y
+
+# Later runs: export by saved Spotify ID (stable when library order changes)
+python3 run_pipeline.py --saved -y
+python3 run_pipeline.py --saved 1,3 -y
+python3 run_pipeline.py --list-saved
 ```
 
 - `-y` skips the confirmation before Soulseek processing starts.
-- Playlist numbers are **1-based** and match the list shown in the terminal (order can change if you add/remove playlists in Spotify — stable playlist IDs are planned; see project backlog **GOAL-04**).
+- **`--pick`** uses **1-based** indices from the live Spotify library list and updates **`data/saved_playlists.json`** (use **`--no-save-picks`** to skip).
+- **`--saved`** exports from that file by playlist ID (all enabled, or indices into the saved list).
+- **`--playlist-id`** exports ad hoc IDs/URLs without updating the saved file.
 
 **Merge only** (no downloads):
 
@@ -149,6 +156,7 @@ Important files under `data/`:
 | `exports/*-spotify-export.csv` | Raw Spotify exports |
 | `logs/` | Import logs and `results_*.csv` reports |
 | `checkpoint.json` | Resume state for interrupted runs |
+| `saved_playlists.json` | Stable playlist IDs for `--saved` exports |
 
 ---
 
