@@ -162,9 +162,12 @@ async def _http_get_json(url: str) -> Any:
     with concurrent.futures.ThreadPoolExecutor() as pool:
         resp = await asyncio.wait_for(
             asyncio.get_event_loop().run_in_executor(
-                pool, lambda: requests.get(url, headers=_headers)
+                pool,
+                lambda: requests.get(
+                    url, headers=_headers, timeout=_enqueue_timeout
+                ),
             ),
-            timeout=_enqueue_timeout,
+            timeout=_enqueue_timeout + 5,
         )
     resp.raise_for_status()
     return resp.json()
@@ -482,9 +485,12 @@ async def check_queue_status(username: str) -> Tuple[bool, int]:
         with concurrent.futures.ThreadPoolExecutor() as pool:
             resp = await asyncio.wait_for(
                 asyncio.get_event_loop().run_in_executor(
-                    pool, lambda: requests.get(url, headers=_headers)
+                    pool,
+                    lambda: requests.get(
+                        url, headers=_headers, timeout=_enqueue_timeout
+                    ),
                 ),
-                timeout=_enqueue_timeout,
+                timeout=_enqueue_timeout + 5,
             )
         resp.raise_for_status()
         downloads = _flatten_transfer_downloads(resp.json())

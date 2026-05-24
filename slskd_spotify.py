@@ -30,8 +30,9 @@ from slskd_worker import Stats, configure_worker_context, process_csv, reconcile
 from slskd_config import (
     HOST,
     API_PATH,
-    API_KEY,
     CSV_FILE,
+    ensure_slskd_api_key,
+    make_headers,
     QUEUE_LIMIT,
     RATE_LIMIT_DELAY,
     BATCH_SIZE,
@@ -46,7 +47,6 @@ from slskd_config import (
     ALLOWED_FORMATS,
     POLL_INTERVAL,
     MAX_POLLS,
-    make_headers,
 )
 
 
@@ -56,9 +56,6 @@ log_dir = DEFAULT_OUTPUT_DIR
 
 # ======== Configuration ========
 # Defaults are imported from slskd_config and may be overridden by CLI args.
-
-HEADERS = make_headers(API_KEY)
-
 
 stats = Stats()
 results_log = []  # To track detailed results for reporting
@@ -276,10 +273,13 @@ async def main():
     EXCLUDED_EXTENSIONS = args.exclude
     QUEUE_LIMIT = args.queue_limit
 
+    api_key = ensure_slskd_api_key()
+    headers = make_headers(api_key)
+
     configure_search_context(
         host=HOST,
         api_path=API_PATH,
-        headers=HEADERS,
+        headers=headers,
         rate_limit_delay=RATE_LIMIT_DELAY,
         max_retries=MAX_RETRIES,
         search_timeout=SEARCH_TIMEOUT,
@@ -294,8 +294,8 @@ async def main():
     configure_queue_context(
         host=HOST,
         api_path=API_PATH,
-        api_key=API_KEY,
-        headers=HEADERS,
+        api_key=api_key,
+        headers=headers,
         enqueue_timeout=ENQUEUE_TIMEOUT,
         queue_limit=QUEUE_LIMIT,
         queued_files_tracker=queued_files_tracker,

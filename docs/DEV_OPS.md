@@ -125,3 +125,28 @@ python3 slskd_spotify.py --csv fixtures/srch/validate_input.csv --output-dir dat
 ```
 
 Compare new `data/logs/results_*.csv` to the baseline noted in that README.
+
+## Security (operator notes)
+
+**Trust model:** single-user machine; you run the scripts, own `data/`, and trust local SLSKD (`http://localhost:5030`). Treat Soulseek filenames and CSV fields as untrusted when opened in Excel (reports use quoted CSV; see SEC-06 in the project plan).
+
+| Asset | Location | Notes |
+| --- | --- | --- |
+| SLSKD API key | `api.txt` `[slskd]` or `SLSKD_API_KEY` | Required for `slskd_spotify.py`; chmod **600** recommended |
+| Spotify tokens | `~/.config/slskd/spotify_tokens.json` (default) | OAuth refresh; do not commit |
+| Resume state | `data/checkpoint.pkl` | Only resume checkpoints you created (pickle → JSON planned: SEC-01) |
+| Logs | `data/logs/` | May contain search text and usernames |
+
+**OAuth redirect:** must be loopback only — default `http://127.0.0.1:8765/callback`. Do not use `0.0.0.0` or a LAN IP.
+
+**Debug:** `SPOTIFY_DEBUG=1` logs request flow; error bodies are redacted when JSON contains token fields.
+
+## Spotify Developer Dashboard (OPS-04)
+
+When creating or reviewing your Spotify app:
+
+1. **Redirect URIs** — add exactly `http://127.0.0.1:8765/callback` (must match `api.txt` / `SPOTIFY_REDIRECT_URI`).
+2. **Client ID** — copy to `api.txt` `[spotify]` or `SPOTIFY_CLIENT_ID`.
+3. **Client secret** — if your app type requires it, store in `api.txt` or env only (never commit).
+4. **Scopes** — playlist read scopes used by export; no extra scopes unless you add features.
+5. **Users** — add your Spotify account as a test user while the app is in Development mode.
