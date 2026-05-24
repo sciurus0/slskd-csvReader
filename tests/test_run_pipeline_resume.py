@@ -13,13 +13,13 @@ class TestRunPipelineResume(unittest.TestCase):
         ws = Path("/tmp/dev-workspace")
         self.assertEqual(
             _checkpoint_path(ws, None),
-            (ws / "checkpoint.pkl").resolve(),
+            (ws / "checkpoint.json").resolve(),
         )
 
     def test_build_slskd_argv_default_trims_queue(self) -> None:
         ws = Path("/tmp/dev-workspace")
         queue = ws / "to_queue.csv"
-        ckpt = ws / "checkpoint.pkl"
+        ckpt = ws / "checkpoint.json"
         argv = build_slskd_argv(
             workspace=ws,
             queue_path=queue,
@@ -51,7 +51,7 @@ class TestRunPipelineResume(unittest.TestCase):
             workspace=ws,
             queue_path=ws / "to_queue.csv",
             resume=False,
-            checkpoint_path=ws / "checkpoint.pkl",
+            checkpoint_path=ws / "checkpoint.json",
             download_settle_seconds=None,
             skip_pending_csv=False,
             no_trim_queue=True,
@@ -64,7 +64,7 @@ class TestRunPipelineResume(unittest.TestCase):
             workspace=ws,
             queue_path=ws / "to_queue_pending.csv",
             resume=False,
-            checkpoint_path=ws / "checkpoint.pkl",
+            checkpoint_path=ws / "checkpoint.json",
             download_settle_seconds=30.0,
             skip_pending_csv=True,
             no_trim_queue=False,

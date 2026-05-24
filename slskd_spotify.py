@@ -88,7 +88,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         "--resume",
         "-r",
         action="store_true",
-        help="Resume from checkpoint (default: data/checkpoint.pkl)",
+        help="Resume from checkpoint (default: data/checkpoint.json)",
     )
     golden.add_argument(
         "--no-trim-queue",
@@ -98,7 +98,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     golden.add_argument(
         "--checkpoint-file",
         default=CHECKPOINT_FILE,
-        help=f"Checkpoint pickle (default: {CHECKPOINT_FILE})",
+        help=f"Checkpoint JSON (default: {CHECKPOINT_FILE})",
     )
     golden.add_argument(
         "--skip-pending-csv",

@@ -1,6 +1,7 @@
 # macOS
 .DS_Store
 /checkpoint.pkl
+/checkpoint.json
 /logs
 /data/*
 !/data/.gitkeep

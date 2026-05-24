@@ -89,7 +89,7 @@ def build_pipeline_plan(
     if slskd_only:
         slskd_writes: tuple[str, ...] = (
             "logs/",
-            "checkpoint.pkl",
+            "checkpoint.json",
             "success_ledger.csv (on downloads)",
             "to_queue_pending.csv",
             "to_queue.csv (trimmed vs ledger)",
@@ -122,7 +122,7 @@ def build_pipeline_plan(
         if slskd_action is StageAction.SKIP
         else (
             "logs/",
-            "checkpoint.pkl",
+            "checkpoint.json",
             "success_ledger.csv",
             "to_queue_pending.csv",
             "to_queue.csv (trimmed vs ledger)",
@@ -477,7 +477,7 @@ def main() -> None:
         "--resume",
         "-r",
         action="store_true",
-        help="Skip Spotify export and merge; run slskd_spotify.py --resume from checkpoint.pkl",
+        help="Skip Spotify export and merge; run slskd_spotify.py --resume from checkpoint.json",
     )
     parser.add_argument(
         "--slskd-only",
@@ -495,7 +495,7 @@ def main() -> None:
         "--checkpoint-file",
         type=Path,
         default=None,
-        help=f"Checkpoint pickle for slskd resume (default: <workspace>/{CHECKPOINT_BASENAME})",
+        help=f"Checkpoint JSON for slskd resume (default: <workspace>/{CHECKPOINT_BASENAME})",
     )
     parser.add_argument(
         "--no-trim-queue",
