@@ -6,6 +6,8 @@ This repository is **not** the SLSKD app itself. You install and run SLSKD separ
 
 **Day-to-day operations** (resume, trim, recovery flags, logs): [docs/DEV_OPS.md](docs/DEV_OPS.md)
 
+**Platform:** This project is developed and run on **macOS** (paths and examples below assume that). The scripts use portable Python (`pathlib`, loopback OAuth, `http://localhost:5030`) and are expected to work on **Linux** and **Windows** with SLSKD installed, but those platforms are not documented or tested in-repo yet — see backlog **PLAT-01** in `PROJECT_PLAN.md`.
+
 ---
 
 ## What it does (three steps)
@@ -23,12 +25,10 @@ The usual entry point is **`run_pipeline.py`**, which runs export → merge → 
 | You need | Why |
 | --- | --- |
 | **Python 3.10+** | Run the scripts (`pip install -r requirements.txt`). |
-| **[SLSKD](https://github.com/slskd/slskd) installed and running** | Handles Soulseek search, queue, and downloads. |
-| **SLSKD API key** | In repo-root `api.txt` or `SLSKD_API_KEY` — required before `slskd_spotify.py` starts. |
-| **Spotify Developer app** (for export) | Client ID (+ secret if your app type needs it) for OAuth. |
-| **Soulseek account** | Configured inside the SLSKD app (not in this repo). |
-
-**macOS paths (typical):** SLSKD app under `/Applications/slskd`; config/state in `~/Library/Application Support/slskd`.
+| **[SLSKD](https://github.com/slskd/slskd)** running locally | Soulseek search, download queue, and transfers. |
+| **SLSKD web API key** | Same key in SLSKD config and this repo (`api.txt` or `SLSKD_API_KEY`). |
+| **Spotify Developer app** | OAuth for playlist export (full pipeline only). |
+| **Soulseek account** | Log in through the SLSKD app — not configured in this repo. |
 
 ---
 
@@ -36,23 +36,50 @@ The usual entry point is **`run_pipeline.py`**, which runs export → merge → 
 
 ### 1. Install Python dependencies
 
-From this repo directory (e.g. `slskd-csvReader/DEV`):
+From the repo root (same folder as `run_pipeline.py`):
 
 ```bash
 python3 -m pip install -r requirements.txt
 ```
 
-### 2. Create `api.txt` (gitignored)
+### 2. Set up SLSKD
 
-At the **repo root** (same folder as `run_pipeline.py`), create `api.txt`.
+[SLSKD](https://github.com/slskd/slskd) is the Soulseek client this project drives over HTTP. Install it from the [project releases](https://github.com/slskd/slskd/releases). **macOS:** app under `/Applications/slskd`, config under `~/Library/Application Support/slskd`. **Linux / Windows:** use release binaries or [Docker](https://github.com/slskd/slskd/blob/master/docs/docker.md) (`slskd.yml` under `~/.local/share/slskd` or `%LOCALAPPDATA%\slskd` — see [SLSKD README](https://github.com/slskd/slskd)).
 
-**SLSKD only** (queue processing, no Spotify export):
+1. **Install and sign in** — Open SLSKD and log in with your [Soulseek](https://www.slsknet.org/news/) username and password.
+2. **Create a web API key** — Scripts send `X-API-Key` on each request. The key must be **16–255 characters**. Configure it in SLSKD using one of:
+   - **`slskd.yml`** — under `web.authentication.api_keys` (see [SLSKD config: API keys](https://github.com/slskd/slskd/blob/master/docs/config.md#api-keys));
+   - **Startup flags / env** — `-k` / `--api-key` or `SLSKD_API_KEY` when launching SLSKD (same doc section).
+   Use a role that can search and enqueue downloads (the default primary key is **Administrator**).
+3. **Start SLSKD** — Leave it running. Confirm the web UI loads at [http://localhost:5030](http://localhost:5030) (default; change only if you customized SLSKD’s listen URL).
+4. **Copy the key into this repo** — You will put the **same** string in `api.txt` (step 4 below) or export `SLSKD_API_KEY` before running `slskd_spotify.py`. Without it, the download step exits immediately.
+
+Further SLSKD options (paths, auth, YAML): [configuration guide](https://github.com/slskd/slskd/blob/master/docs/config.md).
+
+### 3. Set up Spotify (playlist export)
+
+Needed for `run_pipeline.py` / `spotify_playlist_fetch.py`. Queue-only runs (`slskd_spotify.py` on an existing `data/to_queue.csv`) skip Spotify.
+
+1. **Create a Developer app** — In the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard), create an app and note the **Client ID** and **Client secret** (Web API console apps use both).
+2. **Register a redirect URI** — Under app settings → **Redirect URIs**, add exactly:
+   `http://127.0.0.1:8765/callback`
+   (Loopback only — do not use `0.0.0.0` or a LAN address.) This must match `redirect_uri` in `api.txt` below.
+3. **Allow your account** — While the app is in **Development** mode, add your Spotify user under **User Management** → test users. Only playlists visible to that account can be exported.
+4. **Scopes** — Export uses playlist-read scopes only; accept the consent screen on first login.
+
+Operator checklist (redirect, secrets, test users): [docs/DEV_OPS.md — Spotify Developer Dashboard](docs/DEV_OPS.md#spotify-developer-dashboard-ops-04). API reference: [Spotify Web API](https://developer.spotify.com/documentation/web-api).
+
+### 4. Create `api.txt`
+
+At the **repo root**, create `api.txt` with the credentials from the steps above.
+
+**SLSKD only** (process `data/to_queue.csv` without exporting):
 
 ```text
 your-slskd-api-key
 ```
 
-**SLSKD + Spotify** (recommended for the full pipeline):
+**SLSKD + Spotify** (full pipeline):
 
 ```ini
 [slskd]
@@ -64,23 +91,17 @@ client_secret = your-spotify-client-secret
 redirect_uri = http://127.0.0.1:8765/callback
 ```
 
-Register that **exact** redirect URI in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). See the checklist in [docs/DEV_OPS.md](docs/DEV_OPS.md#spotify-developer-dashboard-ops-04).
-
 Environment variables override `api.txt` when set (`SLSKD_API_KEY`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_REDIRECT_URI`, etc.).
 
-### 3. Start SLSKD
+### 5. First Spotify login
 
-Open the SLSKD app (or your usual launch method) and confirm the web UI/API responds at `http://localhost:5030`.
-
-### 4. First Spotify login
-
-The first export opens a browser for Spotify OAuth (or prints a URL with `--no-browser`). Tokens are cached by default at `~/.config/slskd/spotify_tokens.json` — do not commit them.
+Run an export (or full pipeline). The first time, a browser opens for Spotify OAuth (or use `--no-browser` and open the printed URL). After you approve access, tokens are cached locally (default `~/.config/slskd/spotify_tokens.json`) for later runs.
 
 ---
 
 ## First run
 
-From the **DEV** repo root. Scripts use `./data/` as the workspace (created automatically).
+From the repo root. Scripts use `./data/` as the workspace (created automatically).
 
 ```bash
 # List playlists, pick by number, then export → merge → download
@@ -142,23 +163,6 @@ Important files under `data/`:
 | `trim_queue.py` | Trim queue vs ledger without a full slskd run |
 | `pipeline_cleanup.py` | Remove ephemeral pending CSVs |
 | `scripts/backfill_ledger.py` | One-time `artist_primary` fix for old ledgers |
-
----
-
-## DEV vs PROD
-
-This project is often kept in two copies:
-
-- **`DEV`** — development tree (this folder); safe place to try flags and inspect `data/`.
-- **`PROD`** — same scripts, **separate `data/`** when you sync code; use when you want a stable production queue.
-
-Only sync code between them unless you intentionally copy data.
-
----
-
-## Do not commit
-
-Keep secrets and runtime data out of git (see `.gitignore`): `api.txt`, `.env`, Spotify token JSON, everything under `data/`, `.cursor/`, and local `PROJECT_PLAN.md`.
 
 ---
 
