@@ -35,7 +35,7 @@ Everything else is derived or ephemeral.
 | `data/merge_state.json` | Per-playlist Spotify `added_at` watermarks |
 | `data/to_queue_pending.csv` | **Ephemeral** — written after a slskd run; failures only; safe to delete after you copy rows you care about |
 | `data/to_queue_pending_validate.csv` | **Ephemeral** — small slice for SRCH/regression; removed after validate runs or via `pipeline_cleanup.py` |
-| `data/checkpoint.pkl` | Resume pointer for interrupted slskd runs |
+| `data/checkpoint.json` | Resume pointer for interrupted slskd runs (legacy `checkpoint.pkl` migrated on load) |
 | `data/exports/` | Spotify exports (`YYYYMMDD-spotify-export.csv`) |
 | `data/logs/` | Import logs and `results_*.csv` reports |
 | `data/archive/csv-YYYYMMDD/` | Dated backups before merge or trim |
@@ -70,7 +70,7 @@ python3 run_pipeline.py --resume -y
 # or: python3 slskd_spotify.py --csv data/to_queue.csv --resume
 ```
 
-Uses `data/checkpoint.pkl` in the workspace.
+Uses `data/checkpoint.json` in the workspace (legacy `.pkl` is migrated once if present).
 
 ### Merge only (no slskd)
 
@@ -134,7 +134,7 @@ Compare new `data/logs/results_*.csv` to the baseline noted in that README.
 | --- | --- | --- |
 | SLSKD API key | `api.txt` `[slskd]` or `SLSKD_API_KEY` | Required for `slskd_spotify.py`; chmod **600** recommended |
 | Spotify tokens | `~/.config/slskd/spotify_tokens.json` (default) | OAuth refresh; do not commit |
-| Resume state | `data/checkpoint.pkl` | Only resume checkpoints you created (pickle → JSON planned: SEC-01) |
+| Resume state | `data/checkpoint.json` | Only resume checkpoints you created; legacy `.pkl` auto-migrates once |
 | Logs | `data/logs/` | May contain search text and usernames |
 
 **OAuth redirect:** must be loopback only — default `http://127.0.0.1:8765/callback`. Do not use `0.0.0.0` or a LAN IP.

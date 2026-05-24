@@ -3,7 +3,7 @@ Pipeline workspace layout (POLISH-02, POLISH-03).
 
 Default workspace is ``<cwd>/data/`` with:
 
-- ``to_queue.csv``, ``success_ledger.csv``, ``merge_state.json``, ``checkpoint.pkl``
+- ``to_queue.csv``, ``success_ledger.csv``, ``merge_state.json``, ``checkpoint.json``
 - ``exports/`` — ``YYYYMMDD-spotify-export.csv``
 - ``logs/`` — slskd import logs and reports
 - ``archive/csv-YYYYMMDD/`` — dated CSV backups (merge, trim)

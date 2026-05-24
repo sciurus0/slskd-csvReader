@@ -10,6 +10,7 @@ Recovery helpers (not golden path): rebuild trackers and reload results from
 from __future__ import annotations
 
 import csv
+import json
 import os
 import pickle
 import re
@@ -106,6 +107,81 @@ _CANDIDATE_LOG_RE = re.compile(
     r"Found available candidate: (.+?) from (\S+) \(queue count:"
 )
 
+CHECKPOINT_FORMAT_VERSION = 1
+
+
+def resolve_checkpoint_paths(checkpoint_file: str | Path) -> Tuple[Path, Path]:
+    """
+    Return ``(json_path, legacy_pkl_path)`` for a checkpoint argument.
+
+    ``--checkpoint-file`` may still point at ``.pkl``; JSON is canonical.
+    """
+    path = Path(checkpoint_file)
+    if path.suffix == ".pkl":
+        return path.with_suffix(".json"), path
+    if path.suffix == ".json":
+        return path, path.with_suffix(".pkl")
+    return path.with_suffix(".json"), path.with_suffix(".pkl")
+
+
+def _checkpoint_payload(
+    *,
+    next_row_index: int,
+    total_rows: int,
+    stats: Any,
+    results_log: List[Dict[str, Any]],
+    queued_files_tracker: Optional[List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "format_version": CHECKPOINT_FORMAT_VERSION,
+        "next_row_index": next_row_index,
+        "row_index": max(0, next_row_index - 1),
+        "total_rows": total_rows,
+        "timestamp": datetime.now().isoformat(),
+        "stats": stats.to_dict(),
+        "results_log": results_log,
+    }
+    if queued_files_tracker is not None:
+        payload["queued_files_tracker"] = queued_files_tracker
+    return payload
+
+
+def _write_json_checkpoint(json_path: Path, payload: Dict[str, Any]) -> None:
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = json_path.with_name(json_path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp, json_path)
+    try:
+        json_path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def _load_json_checkpoint(json_path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        logger.error("Error loading JSON checkpoint %s: %s", json_path, e)
+        return None
+    if not isinstance(data, dict):
+        logger.error("Invalid checkpoint JSON (expected object): %s", json_path)
+        return None
+    return data
+
+
+def _load_legacy_pickle_checkpoint(pkl_path: Path) -> Optional[Dict[str, Any]]:
+    """One-time migration from pre-SEC-01 pickle checkpoints (trusted local files only)."""
+    try:
+        with pkl_path.open("rb") as f:
+            data = pickle.load(f)
+    except Exception as e:
+        logger.error("Error loading legacy pickle checkpoint %s: %s", pkl_path, e)
+        return None
+    if not isinstance(data, dict):
+        logger.error("Invalid legacy checkpoint (expected dict): %s", pkl_path)
+        return None
+    return data
+
 
 def save_checkpoint(
     checkpoint_file: str,
@@ -119,23 +195,22 @@ def save_checkpoint(
     Save progress to a checkpoint file for resuming later.
 
     ``next_row_index`` is the next CSV row to process on resume (0-based).
-    """
-    checkpoint_data: Dict[str, Any] = {
-        "next_row_index": next_row_index,
-        "row_index": max(0, next_row_index - 1),
-        "total_rows": total_rows,
-        "timestamp": datetime.now().isoformat(),
-        "stats": stats.to_dict(),
-        "results_log": results_log,
-    }
-    if queued_files_tracker is not None:
-        checkpoint_data["queued_files_tracker"] = queued_files_tracker
 
+    Writes UTF-8 JSON to the ``.json`` path (see ``resolve_checkpoint_paths``).
+    """
+    json_path, _ = resolve_checkpoint_paths(checkpoint_file)
+    payload = _checkpoint_payload(
+        next_row_index=next_row_index,
+        total_rows=total_rows,
+        stats=stats,
+        results_log=results_log,
+        queued_files_tracker=queued_files_tracker,
+    )
     try:
-        with open(checkpoint_file, "wb") as f:
-            pickle.dump(checkpoint_data, f)
+        _write_json_checkpoint(json_path, payload)
         logger.info(
-            "Checkpoint saved (next row %s/%s, %d tracked file(s))",
+            "Checkpoint saved to %s (next row %s/%s, %d tracked file(s))",
+            json_path,
             next_row_index,
             total_rows,
             len(queued_files_tracker or []),
@@ -150,22 +225,43 @@ def load_checkpoint(checkpoint_file: str) -> Optional[Dict[str, Any]]:
 
     Returns:
         Dictionary with checkpoint data or None if no checkpoint exists.
+
+    Loads JSON when present; otherwise migrates a legacy ``.pkl`` file once.
     """
-    try:
-        if os.path.exists(checkpoint_file):
-            with open(checkpoint_file, "rb") as f:
-                checkpoint_data = pickle.load(f)
-            next_row = checkpoint_data.get("next_row_index")
-            if next_row is None:
-                next_row = int(checkpoint_data.get("row_index", -1)) + 1
-            logger.info(
-                "Checkpoint loaded: resume at row %s/%s",
-                next_row,
-                checkpoint_data["total_rows"],
-            )
-            return checkpoint_data
-        logger.info("No checkpoint file found")
+    json_path, pkl_path = resolve_checkpoint_paths(checkpoint_file)
+    checkpoint_data: Optional[Dict[str, Any]] = None
+
+    if json_path.is_file():
+        checkpoint_data = _load_json_checkpoint(json_path)
+    elif pkl_path.is_file():
+        logger.warning(
+            "Migrating legacy pickle checkpoint %s → %s (trusted local file only)",
+            pkl_path,
+            json_path,
+        )
+        checkpoint_data = _load_legacy_pickle_checkpoint(pkl_path)
+        if checkpoint_data is not None:
+            checkpoint_data.setdefault("format_version", CHECKPOINT_FORMAT_VERSION)
+            try:
+                _write_json_checkpoint(json_path, checkpoint_data)
+            except Exception as e:
+                logger.error("Could not write migrated JSON checkpoint: %s", e)
+
+    if checkpoint_data is None:
+        if not json_path.is_file() and not pkl_path.is_file():
+            logger.info("No checkpoint file found at %s", json_path)
         return None
+
+    try:
+        next_row = checkpoint_data.get("next_row_index")
+        if next_row is None:
+            next_row = int(checkpoint_data.get("row_index", -1)) + 1
+        logger.info(
+            "Checkpoint loaded: resume at row %s/%s",
+            next_row,
+            checkpoint_data.get("total_rows", "?"),
+        )
+        return checkpoint_data
     except Exception as e:
         logger.error(f"Error loading checkpoint: {e}")
         return None
