@@ -141,6 +141,10 @@ Compare new `data/logs/results_*.csv` to the baseline noted in that README.
 
 **Debug:** `SPOTIFY_DEBUG=1` logs request flow; error bodies are redacted when JSON contains token fields.
 
+## Playlist export limits (GOAL-05)
+
+Export only works for playlists you **own** or **collaborate** on. Playlists you **only follow** may appear in `--list-playlists` but return **403** on export. See [goal-05-non-owner-playlist-export.md](goal-05-non-owner-playlist-export.md) for API policy, workarounds (duplicate playlist), and **OPS-01** scope.
+
 ## Spotify Developer Dashboard (OPS-04)
 
 When creating or reviewing your Spotify app:
