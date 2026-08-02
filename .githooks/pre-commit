@@ -1,0 +1,43 @@
+#!/bin/bash
+# Block common secrets in staged changes.
+set -euo pipefail
+if ! git rev-parse --git-dir >/dev/null 2>&1; then exit 0; fi
+staged=$(git diff --cached --name-only --diff-filter=ACM || true)
+[[ -z "${staged}" ]] && exit 0
+fail=0
+block() { echo "pre-commit (secrets): $1" >&2; fail=1; }
+while IFS= read -r path; do
+  [[ -z "$path" ]] && continue
+  case "$path" in
+    .env.example|*/.env.example|*/*.env.example) ;;
+    .env|.env.*|*/.env|*/.env.*) block "refusing env file: $path" ;;
+    api.txt|*/api.txt) block "refusing api.txt: $path" ;;
+    *credentials*.json|*service-account*.json) block "refusing credentials file: $path" ;;
+    id_rsa|id_ed25519|*.pem|*.p12|*.pfx) block "refusing key/cert file: $path" ;;
+  esac
+done <<<"$staged"
+diff=$(git diff --cached -U0 --no-color || true)
+while IFS= read -r line; do
+  [[ "$line" != +* ]] && continue
+  line="${line:1}"
+  [[ "$line" =~ ^[[:space:]]*# ]] && continue
+  [[ "$line" =~ paste_|YOUR_|CHANGE_ME|Put\ your\ API\ key|example\.com|placeholder|your-api-key ]] && continue
+  if [[ "$line" =~ (ghp_|github_pat_|gho_)[A-Za-z0-9_]{20,} ]]; then block "possible GitHub token in staged diff"; fi
+  if [[ "$line" =~ sk-[A-Za-z0-9]{20,} ]]; then block "possible API secret key in staged diff"; fi
+  if [[ "$line" =~ AKIA[0-9A-Z]{16} ]]; then block "possible AWS access key in staged diff"; fi
+  if [[ "$line" =~ xox[baprs]-[A-Za-z0-9-]{10,} ]]; then block "possible Slack token in staged diff"; fi
+  if [[ "$line" =~ BEGIN[[:space:]]+(RSA|OPENSSH|EC|DSA)?[[:space:]]*PRIVATE[[:space:]]+KEY ]]; then block "possible private key block in staged diff"; fi
+done <<<"$diff"
+# Optional gitleaks on staged (if installed)
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! gitleaks protect --staged --no-banner --redact=100 2>/tmp/gitleaks-precommit.err; then
+    echo "pre-commit (gitleaks): secret patterns detected" >&2
+    cat /tmp/gitleaks-precommit.err >&2 || true
+    fail=1
+  fi
+fi
+if [[ "$fail" -ne 0 ]]; then
+  echo "Commit blocked. Keep secrets out of git; use .env.example placeholders + Cursor Cloud Secrets." >&2
+  exit 1
+fi
+exit 0
