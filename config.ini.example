@@ -1,0 +1,15 @@
+# Local secrets — copy to config.ini and fill in (chmod 600). Never commit config.ini.
+# Environment variables override these values when set.
+
+[slskd]
+# Same key as SLSKD web.authentication.api_keys
+api_key = your-api-key-here
+# HTTP base URL of the SLSKD daemon (no trailing slash)
+base_url = http://localhost:5030
+# Optional API prefix (default /api/v0)
+; api_path = /api/v0
+
+[spotify]
+client_id = your-spotify-client-id
+client_secret = your-spotify-client-secret
+redirect_uri = http://127.0.0.1:8765/callback

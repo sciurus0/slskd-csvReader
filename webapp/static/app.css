@@ -1,0 +1,111 @@
+:root {
+  --bg: #1a1d21;
+  --panel: #24292e;
+  --text: #e8eaed;
+  --muted: #9aa0a6;
+  --accent: #3d8bfd;
+  --accent-dim: #2a5f9e;
+  --danger: #f07178;
+  --ok: #7fd962;
+  --radius: 10px;
+  --font: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(1200px 600px at 10% -10%, #2a3544 0%, var(--bg) 55%);
+  color: var(--text);
+  font-family: var(--font);
+}
+
+main {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+}
+
+header h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.75rem;
+  letter-spacing: -0.02em;
+}
+
+.tagline {
+  margin: 0 0 1.5rem;
+  color: var(--muted);
+}
+
+.panel {
+  background: var(--panel);
+  border-radius: var(--radius);
+  padding: 1rem 1.1rem;
+  margin-bottom: 1.25rem;
+}
+
+.panel h2 {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  max-height: 22rem;
+  overflow: auto;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+button {
+  appearance: none;
+  border: none;
+  border-radius: var(--radius);
+  padding: 1rem 0.9rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--accent);
+  color: #fff;
+}
+
+button:hover { background: var(--accent-dim); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.secondary {
+  background: #3a4149;
+  color: var(--text);
+}
+button.secondary:hover { background: #4a525c; }
+
+.message {
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  margin-bottom: 1rem;
+  background: #2f3640;
+}
+.message.error { color: var(--danger); }
+.message.ok { color: var(--ok); }
+
+.footnote {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.footnote code {
+  font-family: var(--mono);
+  font-size: 0.8em;
+}

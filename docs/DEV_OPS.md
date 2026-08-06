@@ -132,7 +132,9 @@ Compare new `data/logs/results_*.csv` to the baseline noted in that README.
 
 | Asset | Location | Notes |
 | --- | --- | --- |
-| SLSKD API key | `api.txt` `[slskd]` or `SLSKD_API_KEY` | Required for `slskd_spotify.py`; chmod **600** recommended |
+| SLSKD API key | `config.ini` / `api.txt` `[slskd]` or `SLSKD_API_KEY` | Required for `slskd_spotify.py`; chmod **600** recommended |
+| SLSKD base URL | `config.ini` `base_url` or `SLSKD_BASE_URL` | Default `http://localhost:5030`; set to NAS IP:5030 for remote daemon |
+
 | Spotify tokens | `~/.config/slskd/spotify_tokens.json` (default) | OAuth refresh; do not commit |
 | Resume state | `data/checkpoint.json` | Only resume checkpoints you created; legacy `.pkl` auto-migrates once |
 | Logs | `data/logs/` | May contain search text and usernames |

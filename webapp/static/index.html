@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>slskd-csvReader</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <h1>slskd-csvReader</h1>
+      <p class="tagline">Click to run — no directory hunting</p>
+    </header>
+
+    <section id="status" class="panel">
+      <h2>Status</h2>
+      <pre id="status-body">Loading…</pre>
+    </section>
+
+    <section class="actions">
+      <button type="button" data-action="pipeline">Run saved pipeline</button>
+      <button type="button" data-action="pipeline-dry" class="secondary">Dry-run pipeline</button>
+      <button type="button" data-action="reconcile">Reconcile downloads</button>
+      <button type="button" data-action="trim">Trim queue</button>
+      <button type="button" data-action="refresh" class="secondary">Refresh status</button>
+    </section>
+
+    <p id="message" class="message" hidden></p>
+
+    <section class="panel">
+      <h2>Active / last run log</h2>
+      <pre id="log-body">(none)</pre>
+    </section>
+
+    <p class="footnote">
+      Downloads are written by SLSKD (NAS:
+      <code>/volume1/Media/downloads/complete/slskd</code>), not into this app’s workspace.
+    </p>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
