@@ -17,6 +17,7 @@ from slskd_saved_playlists import (
     parse_playlist_id_csv,
     parse_spotify_playlist_id,
     save_saved_playlists,
+    upsert_library_selection,
 )
 
 
@@ -110,6 +111,39 @@ class TestSavedPlaylists(unittest.TestCase):
         self.assertEqual(rows[0], {"index": 1, "id": "a" * 22, "name": "On", "enabled": True})
         self.assertEqual(rows[1]["name"], "b" * 22)  # falls back to id when name blank
         self.assertEqual(rows[1]["index"], 2)
+
+    def test_upsert_library_selection(self) -> None:
+        state = {
+            "playlists": [
+                {"id": "a" * 22, "name": "Old", "enabled": False},
+            ]
+        }
+        upsert_library_selection(
+            state,
+            [
+                {"id": "a" * 22, "name": "Renamed"},
+                {"id": "b" * 22, "name": "New"},
+            ],
+        )
+        self.assertEqual(len(state["playlists"]), 2)
+        self.assertTrue(state["playlists"][0]["enabled"])
+        self.assertEqual(state["playlists"][0]["name"], "Renamed")
+        self.assertEqual(state["playlists"][1]["id"], "b" * 22)
+
+    def test_upsert_replace_enabled_set(self) -> None:
+        state = {
+            "playlists": [
+                {"id": "a" * 22, "name": "A", "enabled": True},
+                {"id": "b" * 22, "name": "B", "enabled": True},
+            ]
+        }
+        upsert_library_selection(
+            state,
+            [{"id": "a" * 22, "name": "A"}],
+            replace_enabled_set=True,
+        )
+        self.assertTrue(state["playlists"][0]["enabled"])
+        self.assertFalse(state["playlists"][1]["enabled"])
 
 
 if __name__ == "__main__":

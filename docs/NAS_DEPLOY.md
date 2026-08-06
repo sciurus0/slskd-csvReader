@@ -1,6 +1,6 @@
 # NAS deploy — slskd-csvReader web UI
 
-Companion FastAPI UI (port **8766**) that runs `run_pipeline.py --saved -y`, reconcile, and trim without remembering Mac paths. Same ship pattern as Home Hunt.
+Companion FastAPI **operator control panel** (port **8766**) for Spotify library refresh → saved playlist selection, full `run_pipeline.py` options, and queue ops (reconcile / trim / resume / merge / retry / cleanup). Same ship pattern as Home Hunt.
 
 ## What lands where
 
@@ -8,33 +8,48 @@ Companion FastAPI UI (port **8766**) that runs `run_pipeline.py --saved -y`, rec
 |------|----------|
 | `/volume1/Docker/appdata/csvreader/` | Workspace: `to_queue.csv`, ledger, logs, `config.ini`, `spotify_tokens.json`, `saved_playlists.json` |
 | `/volume1/Media/downloads/complete/slskd` | **Downloaded audio** (SLSKD writes here — not the csvReader container) |
-| `http://NAS:8766/` | Button UI (LAN / Tailscale only) |
+| `http://NAS:8766/` | Control panel (LAN / Tailscale only) |
 
 ## Prerequisites
 
 1. NAS media stack SLSKD healthy at `http://NAS:5030`.
 2. `SLSKD_API_KEY` (same key as SLSKD) available in `/volume1/Docker/.env` and/or `appdata/csvreader/config.ini`.
 3. Set `SLSKD_BASE_URL=http://<NAS_LAN_IP>:5030` in `/volume1/Docker/.env` (or `base_url` in appdata `config.ini`).
-4. Spotify: one-time Mac login (loopback OAuth), then copy tokens to NAS.
+4. Spotify: Mac login (loopback OAuth), then copy tokens to NAS (see below).
 
-## Spotify token bootstrap (Mac)
+## Spotify tokens (Mac re-auth)
+
+OAuth redirect is **loopback-only** (`http://127.0.0.1:8765/callback`). The NAS container cannot complete browser login. When the UI shows a token banner, run this **on a Mac**:
 
 ```bash
-# On Mac, against your existing Spotify app credentials:
+export NAS_HOST=nas   # SSH Host alias, or user@ip
+cd /Users/harvey/Documents/Development/slskd-csvReader/DEV
+bash scripts/nas-spotify-reauth.sh
+# or: bash scripts/nas-spotify-reauth.sh --no-browser
+```
+
+That script:
+
+1. Runs `spotify_playlist_fetch.py --login-only` on the Mac (writes `/tmp/spotify_tokens.json`).
+2. `scp`s the file to the NAS.
+3. Installs it at `/volume1/Docker/appdata/csvreader/spotify_tokens.json` (mode `600`).
+4. Restarts the `csvreader` container and checks `/api/spotify/token-status`.
+
+Manual equivalent (legacy):
+
+```bash
 python3 spotify_playlist_fetch.py --login-only --token-cache /tmp/spotify_tokens.json
-# Also populate saved playlists once if needed:
-python3 run_pipeline.py --pick 1,2 -y --skip-slskd --workspace /path/to/staging
 scp -P 220 /tmp/spotify_tokens.json "$NAS_HOST:/tmp/"
 ssh -t -p 220 "$NAS_HOST" \
   'sudo mv /tmp/spotify_tokens.json /volume1/Docker/appdata/csvreader/spotify_tokens.json && sudo chmod 600 /volume1/Docker/appdata/csvreader/spotify_tokens.json'
 ```
 
-Copy `saved_playlists.json` into appdata the same way if the NAS workspace is empty.
+Populate saved playlists from the UI (**Library → Refresh from Spotify → Save selection**) or once via CLI `--pick`.
 
 ## Deploy from Mac
 
 ```bash
-export NAS_HOST='ratatuskr@192.168.0.245'   # or your DSM user@host
+export NAS_HOST='ratatuskr@192.168.0.245'   # or your DSM user@host / Host alias `nas`
 export NAS_SSH_PORT=220                    # optional; default 220
 
 cd /Users/harvey/Documents/Development/slskd-csvReader/DEV

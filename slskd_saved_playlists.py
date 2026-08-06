@@ -165,6 +165,55 @@ def merge_library_picks_into_saved(
     return state
 
 
+def upsert_library_selection(
+    state: Dict[str, Any],
+    selected: Sequence[Dict[str, Any]],
+    *,
+    replace_enabled_set: bool = False,
+) -> Dict[str, Any]:
+    """
+    Upsert *selected* library playlists into saved state as enabled.
+
+    *selected* items need ``id`` (and optional ``name``). Existing order is preserved;
+    new ids append. When *replace_enabled_set* is True, every saved playlist not in
+    the selection is set ``enabled=False`` (rows are kept, not deleted).
+    """
+    by_id: Dict[str, Dict[str, Any]] = {
+        (p.get("id") or "").strip(): dict(p)
+        for p in state.get("playlists") or []
+        if (p.get("id") or "").strip()
+    }
+    order: List[str] = [
+        (p.get("id") or "").strip()
+        for p in state.get("playlists") or []
+        if (p.get("id") or "").strip()
+    ]
+
+    selected_ids: List[str] = []
+    for pl in selected:
+        pid = (pl.get("id") or "").strip()
+        if not pid:
+            continue
+        selected_ids.append(pid)
+        entry = {
+            "id": pid,
+            "name": (pl.get("name") or "").strip() or (by_id.get(pid) or {}).get("name", ""),
+            "enabled": True,
+        }
+        if pid not in by_id:
+            order.append(pid)
+        by_id[pid] = entry
+
+    if replace_enabled_set:
+        selected_set = set(selected_ids)
+        for pid, entry in by_id.items():
+            if pid not in selected_set:
+                entry["enabled"] = False
+
+    state["playlists"] = [by_id[pid] for pid in order if pid in by_id]
+    return state
+
+
 def apply_enabled_updates(state: Dict[str, Any], updates: Dict[str, bool]) -> Dict[str, Any]:
     """Set ``enabled`` for saved playlists whose id is a key in *updates*.
 
