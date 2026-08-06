@@ -165,6 +165,32 @@ def merge_library_picks_into_saved(
     return state
 
 
+def apply_enabled_updates(state: Dict[str, Any], updates: Dict[str, bool]) -> Dict[str, Any]:
+    """Set ``enabled`` for saved playlists whose id is a key in *updates*.
+
+    Unknown ids are ignored. Mutates and returns *state* for convenience.
+    """
+    for pl in state.get("playlists") or []:
+        pid = (pl.get("id") or "").strip()
+        if pid in updates:
+            pl["enabled"] = bool(updates[pid])
+    return state
+
+
+def list_saved_playlists_public(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """1-based, JSON-friendly view of saved playlists for the web UI."""
+    playlists: List[Dict[str, Any]] = list(state.get("playlists") or [])
+    return [
+        {
+            "index": i,
+            "id": pl.get("id") or "",
+            "name": pl.get("name") or pl.get("id") or "?",
+            "enabled": bool(pl.get("enabled", True)),
+        }
+        for i, pl in enumerate(playlists, start=1)
+    ]
+
+
 def entries_from_playlist_ids(ids: Sequence[str], *, names: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
     names = names or {}
     out: List[Dict[str, Any]] = []

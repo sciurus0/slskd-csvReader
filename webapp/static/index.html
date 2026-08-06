@@ -18,6 +18,20 @@
       <pre id="status-body">Loading…</pre>
     </section>
 
+    <section id="playlists" class="panel">
+      <h2>Saved playlists</h2>
+      <p class="panel-hint">
+        Selection is saved and used by the next “Run saved pipeline” / “Dry-run pipeline”.
+      </p>
+      <div class="playlist-toolbar">
+        <button type="button" data-playlist-action="select-all" class="secondary small">Select all</button>
+        <button type="button" data-playlist-action="select-none" class="secondary small">Select none</button>
+      </div>
+      <ul id="playlist-list" class="playlist-list" aria-live="polite">
+        <li class="muted">Loading…</li>
+      </ul>
+    </section>
+
     <section class="actions">
       <button type="button" data-action="pipeline">Run saved pipeline</button>
       <button type="button" data-action="pipeline-dry" class="secondary">Dry-run pipeline</button>

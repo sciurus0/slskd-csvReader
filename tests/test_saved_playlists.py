@@ -8,8 +8,10 @@ import unittest
 from pathlib import Path
 
 from slskd_saved_playlists import (
+    apply_enabled_updates,
     entries_for_export,
     entries_from_playlist_ids,
+    list_saved_playlists_public,
     load_saved_playlists,
     merge_library_picks_into_saved,
     parse_playlist_id_csv,
@@ -85,6 +87,29 @@ class TestSavedPlaylists(unittest.TestCase):
         pid = "d" * 22
         rows = entries_from_playlist_ids([pid], names={pid: "Named"})
         self.assertEqual(rows[0]["name"], "Named")
+
+    def test_apply_enabled_updates(self) -> None:
+        state = {
+            "playlists": [
+                {"id": "a" * 22, "name": "On", "enabled": True},
+                {"id": "b" * 22, "name": "Off", "enabled": False},
+            ]
+        }
+        apply_enabled_updates(state, {"a" * 22: False, "z" * 22: True})
+        self.assertFalse(state["playlists"][0]["enabled"])
+        self.assertFalse(state["playlists"][1]["enabled"])  # untouched, unknown id ignored
+
+    def test_list_saved_playlists_public(self) -> None:
+        state = {
+            "playlists": [
+                {"id": "a" * 22, "name": "On", "enabled": True},
+                {"id": "b" * 22, "name": "", "enabled": False},
+            ]
+        }
+        rows = list_saved_playlists_public(state)
+        self.assertEqual(rows[0], {"index": 1, "id": "a" * 22, "name": "On", "enabled": True})
+        self.assertEqual(rows[1]["name"], "b" * 22)  # falls back to id when name blank
+        self.assertEqual(rows[1]["index"], 2)
 
 
 if __name__ == "__main__":

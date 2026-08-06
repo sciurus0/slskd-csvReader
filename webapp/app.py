@@ -6,7 +6,7 @@ import csv
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -14,6 +14,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from slskd_config import read_slskd_base_url, reset_local_config_cache
+from slskd_saved_playlists import (
+    apply_enabled_updates,
+    list_saved_playlists_public,
+    load_saved_playlists,
+    save_saved_playlists,
+)
 from webapp import runner
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -21,6 +27,15 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 class RunRequest(BaseModel):
     dry_run: bool = Field(default=False, description="Pass --dry-run where supported")
+
+
+class PlaylistEnabledUpdate(BaseModel):
+    id: str
+    enabled: bool
+
+
+class PlaylistsUpdateRequest(BaseModel):
+    updates: List[PlaylistEnabledUpdate] = Field(default_factory=list)
 
 
 def create_app() -> FastAPI:
@@ -52,6 +67,21 @@ def create_app() -> FastAPI:
                 "(NAS: /volume1/Media/downloads/complete/slskd), not in this workspace."
             ),
         }
+
+    @app.get("/api/playlists")
+    def list_playlists() -> Dict[str, Any]:
+        reset_local_config_cache()
+        state = load_saved_playlists(runner.workspace_path())
+        return {"playlists": list_saved_playlists_public(state)}
+
+    @app.post("/api/playlists")
+    def update_playlists(body: PlaylistsUpdateRequest) -> Dict[str, Any]:
+        ws = runner.workspace_path()
+        state = load_saved_playlists(ws)
+        updates = {u.id: u.enabled for u in body.updates}
+        state = apply_enabled_updates(state, updates)
+        save_saved_playlists(ws, state)
+        return {"playlists": list_saved_playlists_public(state)}
 
     @app.post("/api/runs/pipeline")
     def run_pipeline(body: RunRequest = RunRequest()) -> Dict[str, Any]:

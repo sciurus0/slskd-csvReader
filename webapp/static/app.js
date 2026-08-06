@@ -3,8 +3,14 @@
   const logBody = document.getElementById("log-body");
   const message = document.getElementById("message");
   const buttons = document.querySelectorAll("button[data-action]");
+  const playlistList = document.getElementById("playlist-list");
+  const playlistToolbar = document.querySelectorAll("button[data-playlist-action]");
+  const pipelineButtons = document.querySelectorAll(
+    'button[data-action="pipeline"], button[data-action="pipeline-dry"]'
+  );
 
   let pollTimer = null;
+  let playlists = [];
 
   function showMessage(text, kind) {
     message.hidden = !text;
@@ -96,6 +102,91 @@
       if (btn.dataset.action === "refresh") return;
       btn.disabled = busy;
     });
+    // Re-apply the "needs >=1 enabled playlist" constraint on top of busy-state,
+    // since clearing busy alone would otherwise re-enable pipeline buttons.
+    updatePipelineButtons();
+    playlistList.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+      cb.disabled = busy;
+    });
+    playlistToolbar.forEach((btn) => {
+      btn.disabled = busy;
+    });
+  }
+
+  function updatePipelineButtons() {
+    const anyEnabled = playlists.some((pl) => pl.enabled);
+    pipelineButtons.forEach((btn) => {
+      btn.disabled = btn.disabled || !anyEnabled;
+      btn.title = anyEnabled ? "" : "Enable at least one saved playlist first";
+    });
+  }
+
+  function renderPlaylists() {
+    if (!playlists.length) {
+      playlistList.innerHTML =
+        '<li class="muted">No saved playlists yet. Use the CLI (`--pick`) to add some.</li>';
+      updatePipelineButtons();
+      return;
+    }
+    playlistList.innerHTML = "";
+    playlists.forEach((pl) => {
+      const li = document.createElement("li");
+      li.className = "playlist-row";
+
+      const label = document.createElement("label");
+      label.className = "switch-row";
+
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = !!pl.enabled;
+      input.addEventListener("change", () => togglePlaylist(pl.id, input.checked));
+
+      const track = document.createElement("span");
+      track.className = "switch-track";
+
+      const name = document.createElement("span");
+      name.className = "playlist-name";
+      name.textContent = pl.name || pl.id;
+
+      label.appendChild(input);
+      label.appendChild(track);
+      label.appendChild(name);
+      li.appendChild(label);
+      playlistList.appendChild(li);
+    });
+    updatePipelineButtons();
+  }
+
+  async function loadPlaylists() {
+    try {
+      const res = await fetch("/api/playlists");
+      if (!res.ok) throw new Error("playlists " + res.status);
+      const data = await res.json();
+      playlists = data.playlists || [];
+      renderPlaylists();
+    } catch (e) {
+      playlistList.innerHTML = '<li class="muted">Failed to load playlists.</li>';
+    }
+  }
+
+  async function savePlaylistUpdates(updates) {
+    const res = await fetch("/api/playlists", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ updates }),
+    });
+    if (!res.ok) {
+      showMessage("Failed to update playlist selection", "error");
+      return;
+    }
+    const data = await res.json();
+    playlists = data.playlists || [];
+    renderPlaylists();
+    await refreshStatusQuiet();
+  }
+
+  function togglePlaylist(id, enabled) {
+    savePlaylistUpdates([{ id, enabled }]);
   }
 
   async function start(path, body) {
@@ -137,8 +228,17 @@
     });
   });
 
+  playlistToolbar.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const enabled = btn.dataset.playlistAction === "select-all";
+      if (!playlists.length) return;
+      savePlaylistUpdates(playlists.map((pl) => ({ id: pl.id, enabled })));
+    });
+  });
+
   refreshStatus().catch((e) => {
     statusBody.textContent = String(e);
     showMessage(String(e), "error");
   });
+  loadPlaylists();
 })();

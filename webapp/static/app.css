@@ -65,6 +65,108 @@ pre {
   overflow: auto;
 }
 
+.panel-hint {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.playlist-toolbar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+button.small {
+  padding: 0.4rem 0.7rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.playlist-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.playlist-list li.muted {
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 0.4rem 0;
+}
+
+.playlist-row {
+  padding: 0.15rem 0;
+  border-bottom: 1px solid #333a41;
+}
+.playlist-row:last-child { border-bottom: none; }
+
+.playlist-name {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Toggle-switch row: whole row is the accessible label for its checkbox. */
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.3rem 0.1rem;
+  cursor: pointer;
+}
+
+.switch-row input {
+  position: absolute;
+  opacity: 0;
+  width: 2.4rem;
+  height: 1.35rem;
+  margin: 0;
+  cursor: pointer;
+}
+.switch-row .switch-track {
+  position: relative;
+  flex: 0 0 auto;
+  width: 2.4rem;
+  height: 1.35rem;
+  background: #3a4149;
+  border-radius: 999px;
+  transition: background-color 120ms ease;
+}
+.switch-track::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(1.35rem - 4px);
+  height: calc(1.35rem - 4px);
+  border-radius: 50%;
+  background: var(--text);
+  transition: transform 120ms ease;
+}
+.switch-row input:checked + .switch-track {
+  background: var(--accent-dim);
+}
+.switch-row input:checked + .switch-track::before {
+  transform: translateX(1.05rem);
+  background: var(--accent);
+}
+.switch-row input:focus-visible + .switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.switch-row input:disabled + .switch-track {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.switch-row input:disabled ~ .playlist-name {
+  opacity: 0.6;
+}
+
 .actions {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
@@ -108,4 +210,11 @@ button.secondary:hover { background: #4a525c; }
 .footnote code {
   font-family: var(--mono);
   font-size: 0.8em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch-track,
+  .switch-track::before {
+    transition: none;
+  }
 }
