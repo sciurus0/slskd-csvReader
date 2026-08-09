@@ -6,7 +6,7 @@ This repository is **not** the SLSKD app itself. You install and run SLSKD separ
 
 **Day-to-day operations** (resume, trim, recovery flags, logs): [docs/DEV_OPS.md](docs/DEV_OPS.md)
 
-**Button UI / NAS:** optional FastAPI panel — local `python3 -m uvicorn webapp.app:app --port 8766`, or deploy to Synology like Home Hunt ([docs/NAS_DEPLOY.md](docs/NAS_DEPLOY.md)). Downloads still land in **SLSKD’s** complete folder, not in the UI workspace.
+**Control panel / NAS:** optional FastAPI UI — Spotify library refresh → saved selection, pipeline flags, resume/reconcile/trim/merge. Local: `python3 -m uvicorn webapp.app:app --port 8766`. NAS: [docs/NAS_DEPLOY.md](docs/NAS_DEPLOY.md). Downloads still land in **SLSKD’s** complete folder, not in the UI workspace. Spotify re-auth on Mac: `bash scripts/nas-spotify-reauth.sh`.
 
 **Platform:** This project is developed and run on **macOS** (paths and examples below assume that). The scripts use portable Python (`pathlib`, loopback OAuth, `http://localhost:5030`) and are expected to work on **Linux** and **Windows** with SLSKD installed, but those platforms are not documented or tested in-repo yet — see backlog **PLAT-01** on the [GitHub project board](https://github.com/users/sciurus0/projects/2).
 
