@@ -6,6 +6,8 @@ This repository is **not** the SLSKD app itself. You install and run SLSKD separ
 
 **Day-to-day operations** (resume, trim, recovery flags, logs): [docs/DEV_OPS.md](docs/DEV_OPS.md)
 
+**Control panel / NAS:** optional FastAPI UI — Spotify library refresh → saved selection, pipeline flags, resume/reconcile/trim/merge. Local: `python3 -m uvicorn webapp.app:app --port 8766`. NAS: [docs/NAS_DEPLOY.md](docs/NAS_DEPLOY.md). Downloads still land in **SLSKD’s** complete folder, not in the UI workspace. Spotify re-auth on Mac: `bash scripts/nas-spotify-reauth.sh`.
+
 **Platform:** This project is developed and run on **macOS** (paths and examples below assume that). The scripts use portable Python (`pathlib`, loopback OAuth, `http://localhost:5030`) and are expected to work on **Linux** and **Windows** with SLSKD installed, but those platforms are not documented or tested in-repo yet — see backlog **PLAT-01** on the [GitHub project board](https://github.com/users/sciurus0/projects/2).
 
 ---
@@ -26,7 +28,7 @@ The usual entry point is **`run_pipeline.py`**, which runs export → merge → 
 | --- | --- |
 | **Python 3.10+** | Run the scripts (`pip install -r requirements.txt`). |
 | **[SLSKD](https://github.com/slskd/slskd)** running locally | Soulseek search, download queue, and transfers. |
-| **SLSKD web API key** | Same key in SLSKD config and this repo (`api.txt` or `SLSKD_API_KEY`). |
+| **SLSKD web API key** | Same key in SLSKD config and this repo (`config.ini` / `api.txt` or `SLSKD_API_KEY`). |
 | **Spotify Developer app** | OAuth for playlist export (full pipeline only). |
 | **Soulseek account** | Log in through the SLSKD app — not configured in this repo. |
 
@@ -69,14 +71,16 @@ Needed for `run_pipeline.py` / `spotify_playlist_fetch.py`. Queue-only runs (`sl
 
 Operator checklist (redirect, secrets, test users): [docs/DEV_OPS.md — Spotify Developer Dashboard](docs/DEV_OPS.md#spotify-developer-dashboard-ops-04). API reference: [Spotify Web API](https://developer.spotify.com/documentation/web-api).
 
-### 4. Create `api.txt`
+### 4. Create `config.ini` (or legacy `api.txt`)
 
-At the **repo root**, create `api.txt` with the credentials from the steps above.
+At the **repo root**, copy [`config.ini.example`](config.ini.example) to `config.ini` (gitignored, chmod **600**) and fill in credentials. Legacy `api.txt` still works.
 
 **SLSKD only** (process `data/to_queue.csv` without exporting):
 
-```text
-your-slskd-api-key
+```ini
+[slskd]
+api_key = your-slskd-api-key
+base_url = http://localhost:5030
 ```
 
 **SLSKD + Spotify** (full pipeline):
@@ -84,6 +88,7 @@ your-slskd-api-key
 ```ini
 [slskd]
 api_key = your-slskd-api-key
+base_url = http://localhost:5030
 
 [spotify]
 client_id = your-spotify-client-id
@@ -91,7 +96,7 @@ client_secret = your-spotify-client-secret
 redirect_uri = http://127.0.0.1:8765/callback
 ```
 
-Environment variables override `api.txt` when set (`SLSKD_API_KEY`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_REDIRECT_URI`, etc.).
+Environment variables override the file when set (`SLSKD_API_KEY`, `SLSKD_BASE_URL`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_REDIRECT_URI`, etc.).
 
 ### 5. First Spotify login
 

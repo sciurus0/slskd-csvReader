@@ -77,7 +77,6 @@ class TestEnsureUserAccessTokenExpiry(unittest.TestCase):
     def test_expires_at_set_after_interactive_login(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             token_path = Path(tmp) / "tokens.json"
-            times = iter([1000.0, 1180.0])
 
             with (
                 mock.patch.object(spf, "time") as time_mod,
@@ -94,7 +93,7 @@ class TestEnsureUserAccessTokenExpiry(unittest.TestCase):
                     },
                 ),
             ):
-                time_mod.time.side_effect = lambda: next(times)
+                time_mod.time.return_value = 1180.0
                 token = spf.ensure_user_access_token(
                     "client",
                     None,
