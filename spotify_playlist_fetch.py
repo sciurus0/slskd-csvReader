@@ -577,6 +577,48 @@ def interactive_authorize(
     return code
 
 
+def try_access_token_noninteractive(
+    client_id: str,
+    client_secret: Optional[str],
+    token_path: Path,
+) -> Tuple[Optional[str], str]:
+    """Return ``(access_token, detail)`` using only cache/refresh — never interactive OAuth.
+
+    Used by the web UI / NAS where loopback OAuth cannot complete.
+    """
+    cache = _load_token_cache(token_path)
+    if not cache:
+        if not token_path.is_file():
+            return None, f"token cache missing: {token_path}"
+        return None, f"token cache unreadable or has no refresh_token: {token_path}"
+
+    now = time.time()
+    if cache.get("access_token") and not _token_expired(cache.get("expires_at")):
+        return str(cache["access_token"]), "ok (cached access token)"
+
+    refresh = cache.get("refresh_token")
+    if not refresh:
+        return None, "token cache has no refresh_token; Mac re-auth required"
+
+    if not client_id:
+        return None, "SPOTIFY_CLIENT_ID not configured"
+
+    refreshed = _refresh_access_token(str(refresh), client_id, client_secret)
+    if not refreshed:
+        return None, "refresh_token rejected; Mac re-auth required"
+
+    new_refresh = refreshed.get("refresh_token") or refresh
+    expires_in = float(refreshed.get("expires_in", 3600))
+    updated = {
+        "access_token": refreshed["access_token"],
+        "refresh_token": new_refresh,
+        "expires_at": now + expires_in,
+        "token_type": refreshed.get("token_type", "Bearer"),
+    }
+    _save_token_cache(token_path, updated)
+    return str(refreshed["access_token"]), "ok (refreshed)"
+
+
 def ensure_user_access_token(
     client_id: str,
     client_secret: Optional[str],
@@ -585,25 +627,9 @@ def ensure_user_access_token(
     no_browser: bool,
 ) -> str:
     """Return a valid access token, running OAuth or refresh as needed."""
-    cache = _load_token_cache(token_path)
-    now = time.time()
-
-    if cache and cache.get("access_token") and not _token_expired(cache.get("expires_at")):
-        return cache["access_token"]
-
-    if cache and cache.get("refresh_token"):
-        refreshed = _refresh_access_token(cache["refresh_token"], client_id, client_secret)
-        if refreshed:
-            new_refresh = refreshed.get("refresh_token") or cache["refresh_token"]
-            expires_in = float(refreshed.get("expires_in", 3600))
-            updated = {
-                "access_token": refreshed["access_token"],
-                "refresh_token": new_refresh,
-                "expires_at": now + expires_in,
-                "token_type": refreshed.get("token_type", "Bearer"),
-            }
-            _save_token_cache(token_path, updated)
-            return refreshed["access_token"]
+    token, _detail = try_access_token_noninteractive(client_id, client_secret, token_path)
+    if token:
+        return token
 
     code_verifier, code_challenge = _pkce_verifier_and_challenge()
     state = secrets.token_urlsafe(16)

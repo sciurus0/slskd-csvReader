@@ -28,8 +28,8 @@ from slskd_search import configure_search_context
 from slskd_queue import configure_queue_context
 from slskd_worker import Stats, configure_worker_context, process_csv, reconcile_downloads_only
 from slskd_config import (
-    HOST,
-    API_PATH,
+    read_slskd_api_path,
+    read_slskd_base_url,
     CSV_FILE,
     ensure_slskd_api_key,
     make_headers,
@@ -277,8 +277,8 @@ async def main():
     headers = make_headers(api_key)
 
     configure_search_context(
-        host=HOST,
-        api_path=API_PATH,
+        host=read_slskd_base_url(),
+        api_path=read_slskd_api_path(),
         headers=headers,
         rate_limit_delay=RATE_LIMIT_DELAY,
         max_retries=MAX_RETRIES,
@@ -292,8 +292,8 @@ async def main():
     )
 
     configure_queue_context(
-        host=HOST,
-        api_path=API_PATH,
+        host=read_slskd_base_url(),
+        api_path=read_slskd_api_path(),
         api_key=api_key,
         headers=headers,
         enqueue_timeout=ENQUEUE_TIMEOUT,
