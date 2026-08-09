@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>slskd-csvReader</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <h1>slskd-csvReader</h1>
+      <p class="tagline">Operator control panel — pipeline, Spotify, queue ops</p>
+    </header>
+
+    <section id="auth-banner" class="panel banner" hidden>
+      <h2>Spotify tokens</h2>
+      <p id="auth-detail" class="panel-hint"></p>
+      <div class="row">
+        <code id="reauth-command"></code>
+        <button type="button" id="copy-reauth" class="secondary small">Copy</button>
+      </div>
+      <p class="panel-hint">
+        Loopback OAuth cannot run inside the NAS container. Re-auth on a Mac, then tokens are copied to appdata.
+      </p>
+    </section>
+
+    <section id="status" class="panel">
+      <h2>Status</h2>
+      <pre id="status-body">Loading…</pre>
+    </section>
+
+    <section class="panel">
+      <h2>Playlists</h2>
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab active" data-tab="saved" role="tab" aria-selected="true">Saved</button>
+        <button type="button" class="tab" data-tab="library" role="tab" aria-selected="false">Library (Spotify)</button>
+      </div>
+
+      <div id="tab-saved" class="tab-panel">
+        <p class="panel-hint">
+          Enabled playlists are used by “Run pipeline” when selection is Saved.
+          Toggles persist to <code>saved_playlists.json</code>.
+        </p>
+        <div class="playlist-toolbar">
+          <button type="button" data-playlist-action="select-all" class="secondary small">Select all</button>
+          <button type="button" data-playlist-action="select-none" class="secondary small">Select none</button>
+        </div>
+        <ul id="playlist-list" class="playlist-list" aria-live="polite">
+          <li class="muted">Loading…</li>
+        </ul>
+      </div>
+
+      <div id="tab-library" class="tab-panel" hidden>
+        <p class="panel-hint">
+          Refresh your Spotify library, multi-select, then save into saved playlists (upsert as enabled).
+        </p>
+        <div class="playlist-toolbar">
+          <button type="button" id="refresh-library" class="secondary small">Refresh from Spotify</button>
+          <button type="button" id="library-select-all" class="secondary small">Select all</button>
+          <button type="button" id="library-select-none" class="secondary small">Select none</button>
+          <button type="button" id="save-library-selection">Save selection to saved</button>
+        </div>
+        <label class="check-row">
+          <input type="checkbox" id="replace-enabled-set" />
+          Replace enabled set (disable saved playlists not in this selection)
+        </label>
+        <ul id="library-list" class="playlist-list" aria-live="polite">
+          <li class="muted">Click “Refresh from Spotify”.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Pipeline run</h2>
+      <fieldset class="options">
+        <legend>Selection</legend>
+        <label class="check-row"><input type="radio" name="selection" value="saved" checked /> Saved (all enabled)</label>
+        <label class="check-row"><input type="radio" name="selection" value="saved_indices" /> Saved indices
+          <input type="text" id="saved-indices" class="inline" placeholder="1,3" />
+        </label>
+        <label class="check-row"><input type="radio" name="selection" value="pick" /> Library pick indices
+          <input type="text" id="pick-indices" class="inline" placeholder="1,4,7" />
+        </label>
+        <label class="check-row"><input type="radio" name="selection" value="playlist_id" /> Playlist ID(s)
+          <input type="text" id="playlist-ids" class="inline" placeholder="id or URL" />
+        </label>
+        <label class="check-row"><input type="radio" name="selection" value="resume" /> Resume (--resume)</label>
+        <label class="check-row"><input type="radio" name="selection" value="slskd_only" /> SLSKD only (--slskd-only)</label>
+      </fieldset>
+
+      <fieldset class="options">
+        <legend>Options</legend>
+        <label class="check-row"><input type="checkbox" id="opt-dry-run" /> Dry-run</label>
+        <label class="check-row"><input type="checkbox" id="opt-skip-slskd" /> Skip SLSKD (export + merge only)</label>
+        <label class="check-row"><input type="checkbox" id="opt-force-full" /> Force full import</label>
+        <label class="check-row"><input type="checkbox" id="opt-continue-export" /> Continue on export error</label>
+        <label class="check-row"><input type="checkbox" id="opt-no-save-picks" /> No save picks</label>
+        <label class="check-row"><input type="checkbox" id="opt-skip-pending" /> Skip pending CSV</label>
+        <label class="check-row"><input type="checkbox" id="opt-no-trim" /> No trim queue</label>
+        <label class="field-row">Date <input type="text" id="opt-date" placeholder="YYYYMMDD" /></label>
+        <label class="field-row">Settle seconds <input type="number" id="opt-settle" step="1" min="0" placeholder="default" /></label>
+        <label class="field-row">CSV override <input type="text" id="opt-csv" placeholder="optional path" /></label>
+        <label class="field-row">Checkpoint <input type="text" id="opt-checkpoint" placeholder="optional path" /></label>
+      </fieldset>
+
+      <div class="actions">
+        <button type="button" id="btn-pipeline">Run pipeline</button>
+        <button type="button" id="btn-pipeline-dry" class="secondary">Dry-run pipeline</button>
+        <button type="button" data-action="refresh" class="secondary">Refresh status</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Ops</h2>
+      <fieldset class="options">
+        <legend>Queue / recovery</legend>
+        <div class="actions compact">
+          <button type="button" id="btn-reconcile">Reconcile downloads</button>
+          <button type="button" id="btn-trim">Trim queue</button>
+          <button type="button" id="btn-trim-dry" class="secondary">Trim dry-run</button>
+          <button type="button" id="btn-merge">Merge only</button>
+          <button type="button" id="btn-merge-dry" class="secondary">Merge dry-run</button>
+          <button type="button" id="btn-retry">Retry failed</button>
+          <button type="button" id="btn-gen-report" class="secondary">Gen report</button>
+          <button type="button" id="btn-cleanup-validate" class="secondary">Cleanup validate CSV</button>
+          <button type="button" id="btn-cleanup-ephemeral" class="secondary">Cleanup ephemeral</button>
+          <button type="button" id="btn-slskd-only">SLSKD process queue</button>
+          <button type="button" id="btn-resume">Resume checkpoint</button>
+        </div>
+        <label class="check-row"><input type="checkbox" id="trim-no-backup" /> Trim: no backup</label>
+        <label class="check-row"><input type="checkbox" id="merge-force" /> Merge: force full import</label>
+        <label class="field-row">Merge date <input type="text" id="merge-date" placeholder="YYYYMMDD" /></label>
+        <label class="field-row">Reconcile from CSV <input type="text" id="reconcile-csv" placeholder="optional" /></label>
+        <label class="field-row">Reconcile log <input type="text" id="reconcile-log" placeholder="optional" /></label>
+      </fieldset>
+
+      <fieldset class="options">
+        <legend>SLSKD tuning (process queue / retry / resume via /api/runs/slskd)</legend>
+        <label class="field-row">Batch size <input type="number" id="tune-batch" min="1" placeholder="default" /></label>
+        <label class="field-row">Delay (s) <input type="number" id="tune-delay" step="0.1" min="0" placeholder="default" /></label>
+        <label class="field-row">Formats <input type="text" id="tune-formats" placeholder="flac mp3 …" /></label>
+        <label class="field-row">Exclude <input type="text" id="tune-exclude" placeholder="exts" /></label>
+        <label class="field-row">Queue limit <input type="number" id="tune-queue-limit" min="0" placeholder="default" /></label>
+        <label class="field-row">Settle seconds <input type="number" id="tune-settle" min="0" placeholder="default" /></label>
+        <label class="check-row"><input type="checkbox" id="tune-debug" /> Debug</label>
+        <label class="check-row"><input type="checkbox" id="tune-skip-pending" /> Skip pending CSV</label>
+        <label class="check-row"><input type="checkbox" id="tune-no-trim" /> No trim queue</label>
+      </fieldset>
+    </section>
+
+    <p id="message" class="message" hidden></p>
+
+    <section class="panel">
+      <h2>Active / last run log</h2>
+      <pre id="log-body">(none)</pre>
+    </section>
+
+    <p class="footnote">
+      Downloads are written by SLSKD (NAS:
+      <code>/volume1/Media/downloads/complete/slskd</code>), not into this app’s workspace.
+      Spotify re-auth: <code>NAS_HOST=nas bash scripts/nas-spotify-reauth.sh</code>
+    </p>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
