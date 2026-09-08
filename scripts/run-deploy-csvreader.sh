@@ -1,19 +1,20 @@
 #!/bin/bash
-# Deploy slskd-csvReader web UI to the Synology NAS (home-hunt twin).
+# Deploy slskd-csvReader web UI to HarveyMCP (not HarveyNAS).
 #
 # Usage (from Mac, repo root or scripts/):
-#   export NAS_HOST='ratatuskr@192.168.0.245'
+#   export NAS_HOST='root@192.168.0.196'   # or SSH alias harveymcp-root
+#   export NAS_SSH_PORT=227
 #   bash scripts/run-deploy-csvreader.sh
 #   bash scripts/run-deploy-csvreader.sh --upload-only
 #
-# Access after deploy: http://<NAS_LAN_IP>:8766/ (LAN/Tailscale).
+# Access after deploy: http://192.168.0.196:8766/ (LAN/Tailscale).
 # See docs/NAS_DEPLOY.md
 
 set -euo pipefail
 
 : "${NAS_HOST:?Set NAS_HOST to your DSM SSH target, e.g. export NAS_HOST=user@nas-ip}"
 HOST="${NAS_HOST}"
-PORT="${NAS_SSH_PORT:-220}"
+PORT="${NAS_SSH_PORT:-227}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 

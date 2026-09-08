@@ -1,9 +1,9 @@
 # slskd-csvReader web UI on Synology — align with nas-media-stack / home-hunt.
-# Place as /volume1/Docker/docker-compose.csvreader.yml
-# Build context: /volume1/Docker/csvreader (synced by scripts/run-deploy-csvreader.sh)
+# Place as /volume1/mcp/docker-compose.csvreader.yml
+# Build context: /volume1/mcp/csvreader (synced by scripts/run-deploy-csvreader.sh)
 #
 # Access: LAN / Tailscale only. Never WAN-forward port 8766.
-# Shared TZ from /volume1/Docker/.env when present.
+# Shared TZ from /volume1/mcp/.env when present.
 #
 # Downloads land in SLSKD's dirs (e.g. /volume1/Media/downloads/complete/slskd),
 # not in appdata/csvreader (queue/ledger/logs/tokens only).
@@ -21,13 +21,13 @@ services:
       - CSVREADER_WORKSPACE=/data
       - CSVREADER_CONFIG_FILE=/data/config.ini
       - SPOTIFY_TOKEN_CACHE=/data/spotify_tokens.json
-      # Prefer env overrides when set in /volume1/Docker/.env:
+      # Prefer env overrides when set in /volume1/mcp/.env:
       - SLSKD_BASE_URL=${SLSKD_BASE_URL:-http://192.168.0.245:5030}
       - SLSKD_API_KEY=${SLSKD_API_KEY:-}
       - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID:-}
       - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET:-}
     volumes:
-      - /volume1/Docker/appdata/csvreader:/data
+      - /volume1/mcp/appdata/csvreader:/data
     ports:
       - 8766:8766
     restart: unless-stopped

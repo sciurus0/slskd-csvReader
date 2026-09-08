@@ -6,15 +6,15 @@ Companion FastAPI **operator control panel** (port **8766**) for Spotify library
 
 | Path | Contents |
 |------|----------|
-| `/volume1/Docker/appdata/csvreader/` | Workspace: `to_queue.csv`, ledger, logs, `config.ini`, `spotify_tokens.json`, `saved_playlists.json` |
+| `/volume1/mcp/appdata/csvreader/` | Workspace: `to_queue.csv`, ledger, logs, `config.ini`, `spotify_tokens.json`, `saved_playlists.json` |
 | `/volume1/Media/downloads/complete/slskd` | **Downloaded audio** (SLSKD writes here — not the csvReader container) |
 | `http://NAS:8766/` | Control panel (LAN / Tailscale only) |
 
 ## Prerequisites
 
 1. NAS media stack SLSKD healthy at `http://NAS:5030`.
-2. `SLSKD_API_KEY` (same key as SLSKD) available in `/volume1/Docker/.env` and/or `appdata/csvreader/config.ini`.
-3. Set `SLSKD_BASE_URL=http://<NAS_LAN_IP>:5030` in `/volume1/Docker/.env` (or `base_url` in appdata `config.ini`).
+2. `SLSKD_API_KEY` (same key as SLSKD) available in `/volume1/mcp/.env` and/or `appdata/csvreader/config.ini`.
+3. Set `SLSKD_BASE_URL=http://<NAS_LAN_IP>:5030` in `/volume1/mcp/.env` (or `base_url` in appdata `config.ini`).
 4. Spotify: Mac login (loopback OAuth), then copy tokens to NAS (see below).
 
 ## Spotify tokens (Mac re-auth)
@@ -22,7 +22,8 @@ Companion FastAPI **operator control panel** (port **8766**) for Spotify library
 OAuth redirect is **loopback-only** (`http://127.0.0.1:8765/callback`). The NAS container cannot complete browser login. When the UI shows a token banner, run this **on a Mac**:
 
 ```bash
-export NAS_HOST=nas   # SSH Host alias, or user@ip
+export NAS_HOST=harveymcp-root   # SSH Host alias, or root@192.168.0.196
+export NAS_SSH_PORT=227
 cd /Users/harvey/Documents/Development/slskd-csvReader/DEV
 bash scripts/nas-spotify-reauth.sh
 # or: bash scripts/nas-spotify-reauth.sh --no-browser
@@ -32,16 +33,16 @@ That script:
 
 1. Runs `spotify_playlist_fetch.py --login-only` on the Mac (writes `/tmp/spotify_tokens.json`).
 2. `scp`s the file to the NAS.
-3. Installs it at `/volume1/Docker/appdata/csvreader/spotify_tokens.json` (mode `600`).
+3. Installs it at `/volume1/mcp/appdata/csvreader/spotify_tokens.json` (mode `600`).
 4. Restarts the `csvreader` container and checks `/api/spotify/token-status`.
 
 Manual equivalent (legacy):
 
 ```bash
 python3 spotify_playlist_fetch.py --login-only --token-cache /tmp/spotify_tokens.json
-scp -P 220 /tmp/spotify_tokens.json "$NAS_HOST:/tmp/"
-ssh -t -p 220 "$NAS_HOST" \
-  'sudo mv /tmp/spotify_tokens.json /volume1/Docker/appdata/csvreader/spotify_tokens.json && sudo chmod 600 /volume1/Docker/appdata/csvreader/spotify_tokens.json'
+scp -P 227 /tmp/spotify_tokens.json "$NAS_HOST:/tmp/"
+ssh -t -p 227 "$NAS_HOST" \
+  'mv /tmp/spotify_tokens.json /volume1/mcp/appdata/csvreader/spotify_tokens.json && chmod 600 /volume1/mcp/appdata/csvreader/spotify_tokens.json'
 ```
 
 Populate saved playlists from the UI (**Library → Refresh from Spotify → Save selection**) or once via CLI `--pick`.
@@ -49,12 +50,12 @@ Populate saved playlists from the UI (**Library → Refresh from Spotify → Sav
 ## Deploy from Mac
 
 ```bash
-export NAS_HOST='ratatuskr@192.168.0.245'   # or your DSM user@host / Host alias `nas`
-export NAS_SSH_PORT=220                    # optional; default 220
+export NAS_HOST='root@192.168.0.196'   # or Host alias `harveymcp-root`
+export NAS_SSH_PORT=227
 
-cd /Users/harvey/Documents/Development/slskd-csvReader/DEV
+cd /Users/harvey/Documents/Development/slskd-csvReader
 bash scripts/run-deploy-csvreader.sh --upload-only
-ssh -t -p 220 "$NAS_HOST" 'sudo bash /tmp/install-csvreader.sh'
+ssh -t -p 227 "$NAS_HOST" 'bash /tmp/install-csvreader.sh'
 ```
 
 Or omit `--upload-only` to run the sudo install in one shot (interactive TTY).

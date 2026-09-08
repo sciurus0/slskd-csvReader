@@ -1,11 +1,11 @@
 #!/bin/bash
 # Run on NAS as root: sudo bash /tmp/install-csvreader.sh
-# Aligns with nas-media-stack: /volume1/Docker + appdata/<service>
+# HarveyMCP layout: /volume1/mcp + appdata/<service> (SLSKD stays on HarveyNAS :5030)
 set -euo pipefail
 
 DOCKER=/usr/local/bin/docker
 COMPOSE="$DOCKER compose"
-STACK=/volume1/Docker
+STACK=/volume1/mcp
 APPDATA="$STACK/appdata/csvreader"
 
 mkdir -p "$STACK/csvreader" "$APPDATA/exports" "$APPDATA/logs" "$APPDATA/archive"
