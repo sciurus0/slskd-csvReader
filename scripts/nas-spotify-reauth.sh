@@ -5,7 +5,8 @@
 # open a browser (or print --no-browser URL) against http://127.0.0.1:8765/callback.
 #
 # Usage:
-#   export NAS_HOST=nas                    # or ratatuskr@192.168.0.245
+#   export NAS_HOST=harveymcp-root          # or root@192.168.0.196
+#   export NAS_SSH_PORT=227
 #   bash scripts/nas-spotify-reauth.sh
 #   bash scripts/nas-spotify-reauth.sh --no-browser
 #   bash scripts/nas-spotify-reauth.sh --no-restart
@@ -16,10 +17,10 @@ set -euo pipefail
 
 : "${NAS_HOST:?Set NAS_HOST to your DSM SSH target, e.g. export NAS_HOST=nas}"
 HOST="${NAS_HOST}"
-PORT="${NAS_SSH_PORT:-220}"
+PORT="${NAS_SSH_PORT:-227}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TOKEN_LOCAL="${SPOTIFY_REAUTH_TOKEN_PATH:-/tmp/spotify_tokens.json}"
-APPDATA_TOKEN="/volume1/Docker/appdata/csvreader/spotify_tokens.json"
+APPDATA_TOKEN="/volume1/mcp/appdata/csvreader/spotify_tokens.json"
 
 NO_BROWSER=0
 NO_RESTART=0
