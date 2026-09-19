@@ -27,3 +27,5 @@ Cloud agents run on Ubuntu and do **not** have your home SLSKD daemon or local d
 ## Git
 
 Remote: https://github.com/sciurus0/slskd-csvReader
+
+When the work on a PR for this repo is done (complete, not a draft), merge it with `gh pr merge` after required checks pass, or enable auto-merge. If merge is blocked, report the blocker; do not force-push or admin-bypass. Merge only that PR.
